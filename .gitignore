@@ -28,6 +28,7 @@ local.properties
 /_*.ps1
 /_*.py
 /_*.bat
+/_*.txt
 
 # Log files
 *.log
