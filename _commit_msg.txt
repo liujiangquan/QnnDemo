@@ -1,0 +1,7 @@
+新增 QNN 模型产物转换指南（DLC/SO/BIN）
+
+以 mobilenetv2-12.onnx 为例，系统总结三种 QNN 可运行产物的转换流水线：
+- DLC：qairt-converter / snpe-onnx-to-dlc / qnn-onnx-converter --export_format dlc
+- model.so：qnn-onnx-converter 产出 .cpp+.bin，qnn-model-lib-generator 编译
+- context binary .bin：qnn-context-binary-generator 基于 model.so + 后端预编译
+含三种产物对比、完整流水线图、构建目标列表与常见问题。README 项目结构同步更新。

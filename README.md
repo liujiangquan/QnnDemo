@@ -38,7 +38,8 @@ QnnDemo/
 │   ├── setup_demo.ps1                     # 依赖准备脚本
 │   ├── convert_model.ps1                  # ONNX → DLC 转换脚本
 │   ├── get_logcat.bat                     # logcat 抓取脚本
-│   └── DLC转换指南.md                      # DLC 模型获取与转换详细指南
+│   ├── DLC转换指南.md                      # DLC 模型获取与转换详细指南
+│   └── QNN模型产物转换指南.md               # DLC / SO / BIN 三种产物转换指南
 └── README.md
 ```
 
@@ -69,7 +70,7 @@ QnnDemo/
 - 拷贝 `lib/aarch64-android/libQairtSystem.so`、`libQairtCpu.so` 等 → `app/src/main/jniLibs/arm64-v8a/`
 - 尝试生成 InceptionV3 DLC → `app/src/main/assets/model.dlc`
 
-若自动生成 DLC 失败，可使用 `docs/convert_model.ps1` 从 ONNX 模型转换（详见 `docs/DLC转换指南.md`），
+若自动生成 DLC 失败，可使用 `docs/convert_model.ps1` 从 ONNX 模型转换（详见 `docs/DLC转换指南.md` 与 `docs/QNN模型产物转换指南.md`），
 或手动将任意 `.dlc` 文件拷贝到 `app/src/main/assets/model.dlc`。
 
 ### 2. 在 Android Studio 中构建
