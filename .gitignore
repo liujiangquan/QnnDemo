@@ -1,0 +1,33 @@
+# Built application files
+*.iml
+.gradle/
+/local.properties
+
+# IntelliJ / Android Studio caches
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+/.idea/
+
+# OS
+.DS_Store
+
+# Gradle / Android build outputs
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+/app/build/
+/build/
+
+# Temp scripts (debugging)
+/_*.ps1
+/_*.py
+/_*.bat
+
+# Log files
+*.log

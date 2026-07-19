@@ -1,0 +1,9 @@
+﻿{
+    "inputName":  "input",
+    "name":  "mobilenetv2",
+    "inputShape":  "1,3,224,224",
+    "quantized":  false,
+    "outputName":  "output",
+    "dlcSizeBytes":  14052432,
+    "onnxFile":  "mobilenetv2-12.onnx"
+}

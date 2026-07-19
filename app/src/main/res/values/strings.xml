@@ -1,0 +1,29 @@
+<resources>
+    <string name="app_name">QnnDemo</string>
+
+    <!-- 标题 -->
+    <string name="title_demo">QNN / QAIRT 推理 Demo</string>
+    <string name="subtitle_demo">Qualcomm AI Runtime (QAIRT) Easy API · Android NDK 集成示例</string>
+
+    <!-- 区块标题 -->
+    <string name="section_backend">后端选择</string>
+    <string name="section_graph">图与张量信息</string>
+    <string name="section_log">运行日志</string>
+
+    <!-- 后端 -->
+    <string name="backend_cpu">CPU</string>
+    <string name="backend_gpu">GPU</string>
+    <string name="backend_htp">HTP (NPU)</string>
+
+    <!-- 按钮 -->
+    <string name="btn_init">初始化</string>
+    <string name="btn_load_dlc">加载 DLC</string>
+    <string name="btn_execute">执行推理</string>
+
+    <!-- 输入提示 -->
+    <string name="hint_dlc_name">assets 中的 DLC 文件名</string>
+
+    <!-- 占位 -->
+    <string name="placeholder_graph_info">加载 DLC 后将显示图与张量信息…</string>
+    <string name="placeholder_log">运行日志将显示在此…</string>
+</resources>
