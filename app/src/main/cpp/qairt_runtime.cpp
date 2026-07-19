@@ -5,7 +5,7 @@
 // QairtSystemInterface_getInterface 取出各 V1 接口表，完成 DLC 加载、运行时
 // 构建与推理执行。
 //
-// 注意：QAIRT 头文件由 setup_demo.ps1 从 SDK 拷贝到 ./qairt_include/ 目录下。
+// 注意：QAIRT 头文件由 docs/setup_demo.ps1 从 SDK 拷贝到 ./qairt_include/ 目录下。
 // =============================================================================
 
 #include "qairt_runtime.h"

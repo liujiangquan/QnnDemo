@@ -2,7 +2,7 @@
 # QnnDemo - CMake 构建配置
 #
 # 通过 JNI 桥接 QAIRT (Qualcomm AI Runtime) Easy API，在 Android 上执行推理。
-# QAIRT 头文件与预编译 .so 由 setup_demo.ps1 从 SDK 拷贝到本工程内：
+# QAIRT 头文件与预编译 .so 由 docs/setup_demo.ps1 从 SDK 拷贝到本工程内：
 #   - 头文件:  qairt_include/   (来自 SDK 的 include/QAIRT/)
 #   - 动态库:  ../jniLibs/arm64-v8a/  (来自 SDK 的 lib/aarch64-android/)
 # =============================================================================
@@ -20,7 +20,7 @@ set(QAIRT_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/qairt_include")
 if(NOT EXISTS "${QAIRT_INCLUDE_DIR}/QairtInterface/QairtInterface.h")
     message(WARNING
         "QAIRT 头文件未找到于 ${QAIRT_INCLUDE_DIR}\n"
-        "请先运行项目根目录下的 setup_demo.ps1 / setup_demo.sh 完成依赖准备。\n"
+        "请先运行 docs/setup_demo.ps1 完成依赖准备。\n"
         "该脚本会从 QAIRT SDK 拷贝头文件与预编译库到本工程。")
 endif()
 

@@ -3,10 +3,10 @@
 #
 # Prepare QnnDemo project dependencies from QAIRT SDK.
 #
-# Usage:
-#   .\setup_demo.ps1
-#   .\setup_demo.ps1 -SdkPath "F:\AI\sdk\qairt\2.48.40.260702"
-#   .\setup_demo.ps1 -SkipModel
+# Usage (run from project root):
+#   .\docs\setup_demo.ps1
+#   .\docs\setup_demo.ps1 -SdkPath "F:\AI\sdk\qairt\2.48.40.260702"
+#   .\docs\setup_demo.ps1 -SkipModel
 # =============================================================================
 [CmdletBinding()]
 param(
@@ -16,7 +16,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+# 脚本位于 docs/ 子目录，项目根 = docs 的父目录
+$ProjectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $AppDir      = Join-Path $ProjectRoot "app"
 $CppDir      = Join-Path $AppDir "src\main\cpp"
 $IncludeDir  = Join-Path $CppDir "qairt_include"

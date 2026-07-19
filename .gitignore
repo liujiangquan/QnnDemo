@@ -31,3 +31,4 @@ local.properties
 
 # Log files
 *.log
+/qnndemo_logcat.txt

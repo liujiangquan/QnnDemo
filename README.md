@@ -34,7 +34,11 @@ QnnDemo/
 │       ├── res/values/strings.xml         # 字符串
 │       ├── assets/                         # DLC 模型（由 setup 脚本拷贝）
 │       └── jniLibs/arm64-v8a/              # 预编译 .so（由 setup 脚本拷贝）
-├── setup_demo.ps1                          # 依赖准备脚本
+├── docs/                                   # 文档与脚本目录
+│   ├── setup_demo.ps1                     # 依赖准备脚本
+│   ├── convert_model.ps1                  # ONNX → DLC 转换脚本
+│   ├── get_logcat.bat                     # logcat 抓取脚本
+│   └── DLC转换指南.md                      # DLC 模型获取与转换详细指南
 └── README.md
 ```
 
@@ -54,10 +58,10 @@ QnnDemo/
 
 ### 1. 准备依赖
 
-在项目根目录运行 PowerShell 脚本，自动从 SDK 拷贝头文件、预编译库与示例模型：
+运行 `docs/` 目录下的 PowerShell 脚本，自动从 SDK 拷贝头文件、预编译库与示例模型：
 
 ```powershell
-.\setup_demo.ps1 -SdkPath "F:\AI\sdk\qairt\2.48.40.260702"
+.\docs\setup_demo.ps1 -SdkPath "F:\AI\sdk\qairt\2.48.40.260702"
 ```
 
 脚本完成的工作：
@@ -65,7 +69,8 @@ QnnDemo/
 - 拷贝 `lib/aarch64-android/libQairtSystem.so`、`libQairtCpu.so` 等 → `app/src/main/jniLibs/arm64-v8a/`
 - 尝试生成 InceptionV3 DLC → `app/src/main/assets/model.dlc`
 
-若自动生成 DLC 失败，可手动将任意 `.dlc` 文件拷贝到 `app/src/main/assets/model.dlc`。
+若自动生成 DLC 失败，可使用 `docs/convert_model.ps1` 从 ONNX 模型转换（详见 `docs/DLC转换指南.md`），
+或手动将任意 `.dlc` 文件拷贝到 `app/src/main/assets/model.dlc`。
 
 ### 2. 在 Android Studio 中构建
 
@@ -127,7 +132,7 @@ QAIRT Easy API (C)
 
 ### Q: 运行时提示 `dlopen("libQairtSystem.so") 失败`
 
-确保已运行 `setup_demo.ps1`，且 `app/src/main/jniLibs/arm64-v8a/libQairtSystem.so` 存在。
+确保已运行 `docs/setup_demo.ps1`，且 `app/src/main/jniLibs/arm64-v8a/libQairtSystem.so` 存在。
 检查 `build.gradle.kts` 中 `packaging.jniLibs.useLegacyPackaging = true`。
 
 ### Q: 加载 DLC 失败，提示 `QairtSystemDlc_createFromFile 失败`

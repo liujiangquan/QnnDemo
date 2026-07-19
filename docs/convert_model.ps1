@@ -5,11 +5,11 @@
 #
 # 默认使用 MobileNet v2（~14 MB ONNX，转换后 DLC 约 14 MB），适合移动端 demo。
 #
-# 用法：
-#   .\convert_model.ps1                                   # 默认 MobileNet v2
-#   .\convert_model.ps1 -ModelName squeezenet              # 用 SqueezeNet (~5 MB)
-#   .\convert_model.ps1 -ModelName resnet18                # 用 ResNet-18 (~45 MB)
-#   .\convert_model.ps1 -SdkPath "F:\AI\sdk\qairt\2.48.40.260702"
+# 用法（在项目根目录执行）：
+#   .\docs\convert_model.ps1                                   # 默认 MobileNet v2
+#   .\docs\convert_model.ps1 -ModelName squeezenet              # 用 SqueezeNet (~5 MB)
+#   .\docs\convert_model.ps1 -ModelName resnet18                # 用 ResNet-18 (~45 MB)
+#   .\docs\convert_model.ps1 -SdkPath "F:\AI\sdk\qairt\2.48.40.260702"
 # =============================================================================
 [CmdletBinding()]
 param(
@@ -25,7 +25,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+# 脚本位于 docs/ 子目录，项目根 = docs 的父目录
+$ProjectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $AssetsDir   = Join-Path $ProjectRoot "app\src\main\assets"
 $WorkDir     = Join-Path $ProjectRoot "build\model_convert"
 
@@ -179,7 +180,7 @@ if ($pyVer -ne "3.10" -and $pyVer -ne "3.12") {
     Write-Err "Python '$pyVer' is NOT supported by QAIRT SDK. Only Python 3.10 or 3.12 are supported."
     Write-Host "  Note: SDK's .pyd native extensions depend on python310.dll, so Python 3.10 is recommended." -ForegroundColor Yellow
     Write-Host "  Please install Python 3.10 from: https://www.python.org/downloads/release/python-31011/" -ForegroundColor Yellow
-    Write-Host "  Then re-run: .\convert_model.ps1 -PythonPath 'C:\path\to\Python310\python.exe'" -ForegroundColor Yellow
+    Write-Host "  Then re-run: .\docs\convert_model.ps1 -PythonPath 'C:\path\to\Python310\python.exe'" -ForegroundColor Yellow
     exit 1
 }
 

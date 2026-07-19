@@ -110,23 +110,23 @@ qairt-converter --input_network model.pb   --output_path model.dlc \
 
 ## 4. 快速开始：一键脚本
 
-项目根目录提供了 `convert_model.ps1`，自动完成下载 + 转换 + 拷贝：
+项目 `docs/` 目录提供了 `convert_model.ps1`，自动完成下载 + 转换 + 拷贝：
 
 ```powershell
 # 默认：MobileNet v2（~14 MB），适合绝大多数 Android 设备
-.\convert_model.ps1
+.\docs\convert_model.ps1
 
 # SqueezeNet 1.1（~5 MB，最小）
-.\convert_model.ps1 -ModelName squeezenet
+.\docs\convert_model.ps1 -ModelName squeezenet
 
 # ResNet-18（~45 MB，精度更高）
-.\convert_model.ps1 -ModelName resnet18
+.\docs\convert_model.ps1 -ModelName resnet18
 
 # 量化为 INT8（体积再减 4×，HTP 后端加速）
-.\convert_model.ps1 -ModelName mobilenetv2 -Quantize
+.\docs\convert_model.ps1 -ModelName mobilenetv2 -Quantize
 
 # 指定 SDK 路径
-.\convert_model.ps1 -SdkPath "F:\AI\sdk\qairt\2.48.40.260702"
+.\docs\convert_model.ps1 -SdkPath "F:\AI\sdk\qairt\2.48.40.260702"
 ```
 
 脚本完成后，DLC 会自动拷贝到 `app/src/main/assets/model.dlc`，并生成 `model_meta.json` 记录输入/输出张量信息。
@@ -282,9 +282,9 @@ arr.tofile("img1.raw")
 | **spoken_digit** | TF | <5 MB | <2 MB | 语音数字识别 | SDK `examples/Models/spoken_digit/` |
 
 **推荐选择**：
-- **最快上手**：`.\convert_model.ps1 -ModelName squeezenet`（5 MB，秒级转换）
-- **平衡选择**：`.\convert_model.ps1 -ModelName mobilenetv2`（14 MB，精度好）
-- **演示 HTP 性能**：`.\convert_model.ps1 -ModelName mobilenetv2 -Quantize`（3.5 MB INT8）
+- **最快上手**：`.\docs\convert_model.ps1 -ModelName squeezenet`（5 MB，秒级转换）
+- **平衡选择**：`.\docs\convert_model.ps1 -ModelName mobilenetv2`（14 MB，精度好）
+- **演示 HTP 性能**：`.\docs\convert_model.ps1 -ModelName mobilenetv2 -Quantize`（3.5 MB INT8）
 
 ---
 
