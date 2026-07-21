@@ -38,9 +38,14 @@ class InferenceEngine(private val context: Context) : AutoCloseable {
         }
         // nativeLibraryDir 包含 jniLibs 中打包的 .so 文件
         val libDir = context.applicationInfo.nativeLibraryDir
-        initialized = native.nativeInit(handle, libDir)
-        if (!initialized) Log.e(TAG, "nativeInit 失败, libDir=$libDir")
-        else Log.i(TAG, "nativeInit 成功, libDir=$libDir")
+        // HTP 后端需要 unsigned skel 从 app 私有目录读取（/data/local/tmp 上 app 读不到，
+        // 只有 shell 能读）。给一个可读路径给 native，让它加进 ADSP_LIBRARY_PATH。
+        val htpSkelDir = "${context.filesDir.absolutePath}/htp"
+        java.io.File(htpSkelDir).mkdirs()
+        val searchPath = "$libDir;$htpSkelDir"
+        initialized = native.nativeInit(handle, searchPath)
+        if (!initialized) Log.e(TAG, "nativeInit 失败, searchPath=$searchPath")
+        else Log.i(TAG, "nativeInit 成功, searchPath=$searchPath")
         return initialized
     }
 

@@ -35,6 +35,7 @@ add_library(qnndemo SHARED
 
 target_include_directories(qnndemo PRIVATE
     ${QAIRT_INCLUDE_DIR}
+    ${QAIRT_INCLUDE_DIR}/QNN
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 

@@ -2,8 +2,8 @@
     "inputName":  "input",
     "name":  "mobilenetv2",
     "inputShape":  "1,3,224,224",
-    "quantized":  false,
+    "quantized":  true,
     "outputName":  "output",
-    "dlcSizeBytes":  14052432,
-    "onnxFile":  "mobilenetv2-12.onnx"
+    "onnxFile":  "mobilenetv2-12.onnx",
+    "note":  "INT8 量化 + snpe-dlc-graph-prepare --htp_archs v81 生成 HTP V81 offline cache。原 FP32 备份 model_fp32.dlc.bak。"
 }

@@ -1,5 +1,9 @@
 plugins {
     alias(libs.plugins.android.application)
+    // 统签插件——远程 HTTP 完成私钥运算，本地无 keystore。
+    // signType 走项目根 gradle.properties 里的 unifiedsigning.signType=platform。
+    // 挂上后 assembleDebug/assembleRelease 自动集成远程签名（无需手写 signingConfigs）。
+    id("com.stepos.unifiedsigning.signing") version "1.0.5-alpha01-SNAPSHOT"
 }
 
 android {
@@ -34,6 +38,9 @@ android {
             }
         }
     }
+
+    // 统签插件接管签名，不要写原生 signingConfigs（会跟统签插件的 packageXxx
+    // 任务重定向冲突，报 "in-process unified-apksig-signer failed: null"）
 
     buildTypes {
         release {

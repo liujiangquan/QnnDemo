@@ -1,11 +1,19 @@
 // =============================================================================
 // qairt_runtime.cpp
 //
-// QAIRT Easy API 的运行时实现。通过 dlopen 加载 libQairtSystem.so，再通过
-// QairtSystemInterface_getInterface 取出各 V1 接口表，完成 DLC 加载、运行时
-// 构建与推理执行。
+// QNN Direct API 的运行时实现（类名沿用 QairtRuntime 以避免 JNI 破坏）。
 //
-// 注意：QAIRT 头文件由 docs/setup_demo.ps1 从 SDK 拷贝到 ./qairt_include/ 目录下。
+// 关键设计：绕开 QAIRT 上层，直接用 libQnnSystem.so + libQnnCpu/libQnnHtp.so
+// 的稳定 QNN Core API。原因：vendor firmware 提供的是 QNN 2.46，签名 skel 也
+// 是 2.46；而 QAIRT 2.48 上层跟 QNN 2.46 底层 FastRPC 协议对不上，会在
+// DspTransport.openSession 时报 AEE_ENOSUCHMOD (0x80000406)。
+//
+// 库分工（见 jniLibs/arm64-v8a/）：
+//   - libQnnSystem.so     (SDK 2.48)  纯 host，含 DLC 解析 + composeGraphs
+//   - libQnnCpu.so        (SDK 2.48)  CPU 后端，vendor 不提供
+//   - libQnnHtp.so        (vendor 2.46) HTP 后端，跟 vendor skel 匹配
+//   - libQnnHtpV81Stub.so (vendor 2.46) FastRPC stub
+//   - libQnnHtpPrepare.so (vendor 2.46) 图编译依赖
 // =============================================================================
 
 #include "qairt_runtime.h"
@@ -13,20 +21,24 @@
 #include <dlfcn.h>
 #include <android/log.h>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <sstream>
-#include <type_traits>
 
-// QAIRT C API 头文件
-#include "QairtCommon/QairtCommon.h"
-#include "QairtLog/QairtLog.h"
-#include "QairtSystem/QairtSystemCommon.h"
-#include "QairtSystem/QairtSystemLog.h"
-#include "QairtSystem/QairtSystemDlc.h"
-#include "QairtSystem/QairtSystemBuilder.h"
-#include "QairtSystem/Qairt.h"
-#include "QairtSystem/QairtSystemContext.h"
+#include "QNN/QnnCommon.h"
+#include "QNN/QnnInterface.h"
+#include "QNN/QnnTypes.h"
+#include "QNN/QnnBackend.h"
+#include "QNN/QnnContext.h"
+#include "QNN/QnnDevice.h"
+#include "QNN/QnnGraph.h"
+#include "QNN/QnnLog.h"
+#include "QNN/QnnTensor.h"
+#include "QNN/HTP/QnnHtpDevice.h"
+#include "QNN/HTP/QnnHtpDeviceConfigShared.h"
+#include "QNN/System/QnnSystemInterface.h"
+#include "QNN/System/QnnSystemContext.h"
 
 #define LOG_TAG "QnnDemo"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -35,426 +47,589 @@
 
 namespace qnn_demo {
 
-// ---------------------------------------------------------------------------
-// 工具函数：QAIRT 数据类型 → 字节宽度
-// QAIRT 数据类型枚举的低字节采用 BCD 编码（0x16 表示 16 位，0x32 表示 32 位）
-// ---------------------------------------------------------------------------
-static size_t dataTypeToBytes(int32_t dt) {
-    if (dt == 0x7FFFFFFF) return 0;
-    int hi = (dt & 0xF0) >> 4;
-    int lo = (dt & 0x0F);
-    int bits = hi * 10 + lo;
-    if (bits <= 0) return 0;
-    return static_cast<size_t>((bits + 7) / 8);
-}
+// Snapdragon 8845 SoC model = 685（canoe / SC8480XP）
+static constexpr uint32_t kSocModel8845 = 685;
 
-// ---------------------------------------------------------------------------
-// 运行时实现：持有所有 QAIRT 函数指针表与句柄
-// ---------------------------------------------------------------------------
-struct QairtRuntime::Impl {
-    // dlopen 句柄
-    void* sysLib = nullptr;
-
-    // 入口函数
-    Qairt_Status_t (*getInterface)(uint64_t id, void** out) = nullptr;
-
-    // 各 V1 接口表
-    const QairtSystemLog_V1_t*        logIface       = nullptr;
-    const QairtSystem_DlcV1_t*        dlcIface       = nullptr;
-    const QairtSystemBuilder_V1_t*    builderIface   = nullptr;
-    const Qairt_V1_t*                 qairtIface     = nullptr;
-    const QairtSystem_Context_GraphInfoV1_t* graphInfoIface = nullptr;
-    const QairtSystem_Context_TensorInfoV1_t* tensorInfoIface = nullptr;
-
-    // 运行时句柄
-    QairtSystemLog_Handle_t       logHandle     = nullptr;
-    QairtSystemDlc_Handle_t      dlcHandle     = nullptr;
-    QairtSystemBuilder_Handle_t  builderHandle = nullptr;
-    Qairt_Handle_t               qairtHandle   = nullptr;
-
-    ~Impl() { releaseAll(); }
-
-    void releaseAll() {
-#define SAFE_CALL(fn, ...) if ((fn) != nullptr) (fn)(__VA_ARGS__)
-        if (qairtHandle && qairtIface && qairtIface->free) {
-            qairtIface->free(qairtHandle);
-            qairtHandle = nullptr;
-        }
-        if (builderHandle && builderIface && builderIface->free) {
-            builderIface->free(builderHandle);
-            builderHandle = nullptr;
-        }
-        if (dlcHandle && dlcIface && dlcIface->free) {
-            dlcIface->free(dlcHandle);
-            dlcHandle = nullptr;
-        }
-        if (logHandle && logIface && logIface->free) {
-            logIface->free(logHandle);
-            logHandle = nullptr;
-        }
-#undef SAFE_CALL
-    }
-};
-
-// ---------------------------------------------------------------------------
-// 构造 / 析构
-// ---------------------------------------------------------------------------
-QairtRuntime::QairtRuntime() : impl_(new Impl()) {}
-QairtRuntime::~QairtRuntime() { cleanup(); delete impl_; }
-
-// ---------------------------------------------------------------------------
-// init: dlopen libQairtSystem.so 并加载所有需要的 V1 接口表
-// ---------------------------------------------------------------------------
-bool QairtRuntime::init(const std::string& libSearchPath) {
-    if (ready_) return true;
-
-    const char* kSysLib = "libQairtSystem.so";
-    // 依次尝试：搜索路径 / 默认系统路径
-    if (!libSearchPath.empty()) {
-        std::string full = libSearchPath + "/" + kSysLib;
-        impl_->sysLib = dlopen(full.c_str(), RTLD_NOW | RTLD_LOCAL);
-    }
-    if (!impl_->sysLib) {
-        impl_->sysLib = dlopen(kSysLib, RTLD_NOW | RTLD_LOCAL);
-    }
-    if (!impl_->sysLib) {
-        LOGE("dlopen(%s) 失败: %s", kSysLib, dlerror());
-        return false;
-    }
-
-    impl_->getInterface = reinterpret_cast<decltype(impl_->getInterface)>(
-        dlsym(impl_->sysLib, "QairtSystemInterface_getInterface"));
-    if (!impl_->getInterface) {
-        LOGE("未找到符号 QairtSystemInterface_getInterface: %s", dlerror());
-        return false;
-    }
-
-    auto loadIface = [&](uint64_t id, const char* name, void** out) -> bool {
-        Qairt_Status_t s = impl_->getInterface(id, out);
-        if (s != QAIRT_SUCCESS || !*out) {
-            LOGE("getInterface(%s, id=%llu) 失败: status=%llu", name,
-                 (unsigned long long)id, (unsigned long long)s);
-            return false;
-        }
-        return true;
-    };
-
-    // 用临时 void* 接收接口指针，再赋值给 const 指针成员（避免 reinterpret_cast 丢弃 const）
-    auto loadAndAssign = [&](uint64_t id, const char* name, auto& memberPtr) -> bool {
-        void* p = nullptr;
-        if (!loadIface(id, name, &p)) return false;
-        memberPtr = static_cast<std::remove_reference_t<decltype(memberPtr)>>(p);
-        return true;
-    };
-
-    bool ok = true;
-    ok &= loadAndAssign(QAIRT_SYSTEM_LOG_V1_ID,                "SystemLog",     impl_->logIface);
-    ok &= loadAndAssign(QAIRT_SYSTEM_DLC_V1_ID,                "SystemDlc",      impl_->dlcIface);
-    ok &= loadAndAssign(QAIRT_SYSTEM_BUILDER_V1_ID,            "SystemBuilder", impl_->builderIface);
-    ok &= loadAndAssign(QAIRT_V1_ID,                            "Qairt",         impl_->qairtIface);
-    ok &= loadAndAssign(QAIRT_SYSTEM_CONTEXT_GRAPH_INFO_V1_ID, "GraphInfo",     impl_->graphInfoIface);
-    ok &= loadAndAssign(QAIRT_SYSTEM_CONTEXT_TENSOR_INFO_V1_ID,"TensorInfo",    impl_->tensorInfoIface);
-    if (!ok) return false;
-
-    LOGI("QAIRT 接口表加载完成");
-    return true;
-}
-
-// ---------------------------------------------------------------------------
-// loadDlc: 创建日志 → 从文件加载 DLC → 构建 builder → 生成运行时
-//
-// 注意：QAIRT 内部实现是 C++ 代码，可能在 build() 等关键步骤抛出
-//       internalqairt::Exception（如 PLATFORM_NOT_SUPPORTED），由于我们
-//       通过 C 函数指针调用，必须用 try/catch 包裹，否则会触发 SIGABRT
-//       导致整个进程崩溃。
-// ---------------------------------------------------------------------------
-bool QairtRuntime::loadDlc(const std::string& dlcPath, BackendType backend) {
-    if (!impl_->getInterface) {
-        LOGE("Runtime 未初始化，请先调用 init()");
-        return false;
-    }
-
-    try {
-
-    // 1) 创建 SystemLog（callback 传 NULL，日志走 Android logcat 默认流）
-    //    注意：QairtLog_Level_t 枚举从 1 (ERROR) 开始，0 不是合法值，
-    //    传 0 会触发 QAIRT_LOG_ERROR_INITIALIZATION (11002)。
-    if (impl_->logIface && impl_->logIface->create) {
-        Qairt_Status_t s = impl_->logIface->create(
-            /*callback*/ nullptr, /*maxLogLevel*/ QAIRT_LOG_LEVEL_ERROR,
-            /*userData*/ nullptr, &impl_->logHandle);
-        if (s != QAIRT_SUCCESS) {
-            LOGE("QairtSystemLog_create 失败: %llu", (unsigned long long)s);
-            return false;
-        }
-    }
-
-    // 2) 从文件创建 DLC 句柄
-    if (!impl_->dlcIface || !impl_->dlcIface->createFromFile) {
-        LOGE("SystemDlc 接口不可用");
-        return false;
-    }
-    Qairt_Status_t s = impl_->dlcIface->createFromFile(
-        impl_->logHandle, dlcPath.c_str(), &impl_->dlcHandle);
-    if (s != QAIRT_SUCCESS || !impl_->dlcHandle) {
-        LOGE("QairtSystemDlc_createFromFile(%s) 失败: %llu", dlcPath.c_str(), (unsigned long long)s);
-        return false;
-    }
-    LOGI("DLC 加载成功: %s", dlcPath.c_str());
-
-    // 3) 创建 Builder 并配置
-    if (!impl_->builderIface || !impl_->builderIface->create) {
-        LOGE("SystemBuilder 接口不可用");
-        return false;
-    }
-    s = impl_->builderIface->create(&impl_->builderHandle);
-    if (s != QAIRT_SUCCESS || !impl_->builderHandle) {
-        LOGE("QairtSystemBuilder_create 失败: %llu", (unsigned long long)s);
-        return false;
-    }
-
-    if (impl_->builderIface->setDlc) {
-        impl_->builderIface->setDlc(impl_->builderHandle, impl_->dlcHandle);
-    }
-    if (impl_->builderIface->setBackendType) {
-        impl_->builderIface->setBackendType(impl_->builderHandle,
-            static_cast<QairtSystem_BackendType_t>(backend));
-    }
-    if (impl_->builderIface->setLogLevel) {
-        impl_->builderIface->setLogLevel(impl_->builderHandle, QAIRT_LOG_LEVEL_ERROR);
-    }
-
-    // 4) 构建运行时（最可能抛 C++ 异常的步骤：平台检测、后端初始化）
-    if (!impl_->builderIface->build) {
-        LOGE("SystemBuilder.build 不可用");
-        return false;
-    }
-    s = impl_->builderIface->build(impl_->builderHandle, &impl_->qairtHandle);
-    if (s != QAIRT_SUCCESS || !impl_->qairtHandle) {
-        LOGE("QairtSystemBuilder_build 失败: %llu", (unsigned long long)s);
-        if (impl_->qairtIface && impl_->qairtIface->getLastError) {
-            const char* err = nullptr;
-            impl_->qairtIface->getLastError(impl_->qairtHandle, &err);
-            if (err) LOGE("QAIRT 错误详情: %s", err);
-        }
-        return false;
-    }
-    LOGI("QAIRT 运行时构建成功 (backend=%d)", static_cast<int>(backend));
-
-    // 5) 查询图信息
-    if (!queryGraphInfos()) {
-        LOGW("图信息查询失败，但运行时已构建");
-    }
-
-    ready_ = true;
-    return true;
-
-    } catch (const std::exception& e) {
-        // 捕获 internalqairt::Exception（继承自 std::exception）等 C++ 异常，
-        // 避免 SIGABRT 导致 App 崩溃，转为友好错误返回。
-        LOGE("loadDlc 捕获 C++ 异常: %s", e.what());
-        // 清理已分配的资源
-        if (impl_) impl_->releaseAll();
-        return false;
-    } catch (...) {
-        LOGE("loadDlc 捕获未知 C++ 异常");
-        if (impl_) impl_->releaseAll();
-        return false;
+// Qnn_DataType_t → 字节宽度
+static size_t dataTypeToBytes(Qnn_DataType_t dt) {
+    switch (dt) {
+        case QNN_DATATYPE_INT_8:
+        case QNN_DATATYPE_UINT_8:
+        case QNN_DATATYPE_SFIXED_POINT_8:
+        case QNN_DATATYPE_UFIXED_POINT_8:
+        case QNN_DATATYPE_BOOL_8:
+            return 1;
+        case QNN_DATATYPE_INT_16:
+        case QNN_DATATYPE_UINT_16:
+        case QNN_DATATYPE_SFIXED_POINT_16:
+        case QNN_DATATYPE_UFIXED_POINT_16:
+        case QNN_DATATYPE_FLOAT_16:
+            return 2;
+        case QNN_DATATYPE_INT_32:
+        case QNN_DATATYPE_UINT_32:
+        case QNN_DATATYPE_SFIXED_POINT_32:
+        case QNN_DATATYPE_UFIXED_POINT_32:
+        case QNN_DATATYPE_FLOAT_32:
+            return 4;
+        case QNN_DATATYPE_INT_64:
+        case QNN_DATATYPE_UINT_64:
+        case QNN_DATATYPE_FLOAT_64:
+            return 8;
+        default:
+            return 0;
     }
 }
 
-// 读取单个张量元信息
-TensorInfo QairtRuntime::readTensorInfo(void* th) {
+// 便捷宏：从 Qnn_Tensor_t 取 V1/V2 字段
+static inline const Qnn_TensorV1_t* asV1(const Qnn_Tensor_t& t) {
+    return t.version == QNN_TENSOR_VERSION_1 ? &t.v1 : nullptr;
+}
+static inline const Qnn_TensorV2_t* asV2(const Qnn_Tensor_t& t) {
+    return t.version == QNN_TENSOR_VERSION_2 ? &t.v2 : nullptr;
+}
+static inline Qnn_TensorV1_t* asV1Mut(Qnn_Tensor_t& t) {
+    return t.version == QNN_TENSOR_VERSION_1 ? &t.v1 : nullptr;
+}
+static inline Qnn_TensorV2_t* asV2Mut(Qnn_Tensor_t& t) {
+    return t.version == QNN_TENSOR_VERSION_2 ? &t.v2 : nullptr;
+}
+
+// 从 Qnn_Tensor_t 抽出通用信息填充到 TensorInfo
+static TensorInfo makeTensorInfo(const Qnn_Tensor_t& t) {
     TensorInfo ti;
-    if (!impl_->tensorInfoIface || !th) return ti;
-    // 将 void* 还原为 QAIRT 不透明句柄类型
-    QairtSystem_Context_TensorInfoHandle_t tensorHandle =
-        reinterpret_cast<QairtSystem_Context_TensorInfoHandle_t>(th);
-
-    if (impl_->tensorInfoIface->getName) {
-        const char* name = nullptr;
-        impl_->tensorInfoIface->getName(tensorHandle, &name);
-        if (name) ti.name = name;
+    const char* name = nullptr;
+    uint32_t rank = 0;
+    const uint32_t* dims = nullptr;
+    Qnn_DataType_t dt = QNN_DATATYPE_UNDEFINED;
+    uint32_t id = 0;
+    if (auto* v = asV1(t)) {
+        name = v->name; rank = v->rank; dims = v->dimensions; dt = v->dataType; id = v->id;
+    } else if (auto* v = asV2(t)) {
+        name = v->name; rank = v->rank; dims = v->dimensions; dt = v->dataType; id = v->id;
     }
-    if (impl_->tensorInfoIface->getId) {
-        impl_->tensorInfoIface->getId(tensorHandle, &ti.id);
+    if (name) ti.name = name;
+    ti.id = id;
+    ti.rank = rank;
+    ti.dataType = static_cast<int32_t>(dt);
+    ti.elementBytes = dataTypeToBytes(dt);
+    if (dims && rank > 0) {
+        ti.dimensions.assign(dims, dims + rank);
+        ti.totalElements = 1;
+        for (uint32_t d : ti.dimensions) ti.totalElements *= d;
+    } else {
+        ti.totalElements = 0;
     }
-    if (impl_->tensorInfoIface->getRank) {
-        impl_->tensorInfoIface->getRank(tensorHandle, &ti.rank);
-    }
-    if (impl_->tensorInfoIface->getDimensions) {
-        const uint32_t* dims = nullptr;
-        impl_->tensorInfoIface->getDimensions(tensorHandle, &dims);
-        if (dims && ti.rank > 0) {
-            ti.dimensions.assign(dims, dims + ti.rank);
-        }
-    }
-    if (impl_->tensorInfoIface->getDatatype) {
-        Qairt_DataType_t dt{};
-        impl_->tensorInfoIface->getDatatype(tensorHandle, &dt);
-        ti.dataType = static_cast<int32_t>(dt);
-    }
-
-    ti.elementBytes = dataTypeToBytes(ti.dataType);
-    ti.totalElements = 1;
-    for (uint32_t d : ti.dimensions) ti.totalElements *= d;
     ti.totalBytes = ti.totalElements * ti.elementBytes;
     return ti;
 }
 
 // ---------------------------------------------------------------------------
-// 查询所有图与张量元信息
+// Impl：封装 dlopen 得到的接口表 + 运行时句柄
 // ---------------------------------------------------------------------------
-bool QairtRuntime::queryGraphInfos() {
-    graphs_.clear();
-    if (!impl_->qairtIface || !impl_->qairtIface->getNumGraphInfos) return false;
+struct QairtRuntime::Impl {
+    // dlopen handles
+    void* systemLib = nullptr;      // libQnnSystem.so
+    void* backendLib = nullptr;     // libQnnCpu.so / libQnnHtp.so
 
-    uint32_t numGraphs = 0;
-    Qairt_Status_t s = impl_->qairtIface->getNumGraphInfos(impl_->qairtHandle, &numGraphs);
-    if (s != QAIRT_SUCCESS) return false;
-    LOGI("模型包含 %u 个图", numGraphs);
+    // Interface tables
+    const QnnInterface_t* qnnIface = nullptr;
+    const QnnSystemInterface_t* sysIface = nullptr;
 
-    for (uint32_t i = 0; i < numGraphs; ++i) {
-        QairtSystem_Context_GraphInfoHandle_t gh = nullptr;
-        s = impl_->qairtIface->getGraphInfoAt(impl_->qairtHandle, i, &gh);
-        if (s != QAIRT_SUCCESS || !gh) continue;
+    // Runtime handles
+    Qnn_LogHandle_t backendLog = nullptr;
+    Qnn_LogHandle_t sysLog = nullptr;
+    Qnn_BackendHandle_t backendHandle = nullptr;
+    Qnn_DeviceHandle_t deviceHandle = nullptr;
+    Qnn_ContextHandle_t contextHandle = nullptr;
+    QnnSystemDlc_Handle_t dlcHandle = nullptr;
 
-        GraphInfo gi;
+    BackendType currentBackend = BackendType::CPU;
 
-        if (impl_->graphInfoIface && impl_->graphInfoIface->getName) {
-            const char* name = nullptr;
-            impl_->graphInfoIface->getName(gh, &name);
-            if (name) gi.name = name;
+    // 由 composeGraphs 返回，所有权属 sysIface（DLC 释放时一并释放）
+    QnnSystemContext_GraphInfo_t* composedGraphs = nullptr;
+    uint32_t numComposedGraphs = 0;
+
+    // 每个 graph 的执行句柄 + tensor 数组（浅拷贝自 composedGraphs）
+    struct GraphSlot {
+        std::string name;
+        Qnn_GraphHandle_t handle = nullptr;
+        std::vector<Qnn_Tensor_t> inputs;
+        std::vector<Qnn_Tensor_t> outputs;
+    };
+    std::vector<GraphSlot> graphSlots;
+
+    ~Impl() { releaseAll(); }
+
+    void releaseAll() {
+        if (contextHandle && qnnIface) {
+            qnnIface->QNN_INTERFACE_VER_NAME.contextFree(contextHandle, nullptr);
+            contextHandle = nullptr;
         }
-
-        if (impl_->graphInfoIface && impl_->graphInfoIface->getNumInputs) {
-            uint32_t nIn = 0;
-            impl_->graphInfoIface->getNumInputs(gh, &nIn);
-            for (uint32_t j = 0; j < nIn; ++j) {
-                QairtSystem_Context_TensorInfoHandle_t th = nullptr;
-                impl_->graphInfoIface->getInputAt(gh, j, &th);
-                if (th) gi.inputs.push_back(readTensorInfo(th));
-            }
+        if (deviceHandle && qnnIface) {
+            qnnIface->QNN_INTERFACE_VER_NAME.deviceFree(deviceHandle);
+            deviceHandle = nullptr;
         }
-
-        if (impl_->graphInfoIface && impl_->graphInfoIface->getNumOutputs) {
-            uint32_t nOut = 0;
-            impl_->graphInfoIface->getNumOutputs(gh, &nOut);
-            for (uint32_t j = 0; j < nOut; ++j) {
-                QairtSystem_Context_TensorInfoHandle_t th = nullptr;
-                impl_->graphInfoIface->getOutputAt(gh, j, &th);
-                if (th) gi.outputs.push_back(readTensorInfo(th));
-            }
+        if (backendHandle && qnnIface) {
+            qnnIface->QNN_INTERFACE_VER_NAME.backendFree(backendHandle);
+            backendHandle = nullptr;
         }
+        if (backendLog && qnnIface && qnnIface->QNN_INTERFACE_VER_NAME.logFree) {
+            qnnIface->QNN_INTERFACE_VER_NAME.logFree(backendLog);
+            backendLog = nullptr;
+        }
+        if (dlcHandle && sysIface && sysIface->QNN_SYSTEM_INTERFACE_VER_NAME.systemDlcFree) {
+            sysIface->QNN_SYSTEM_INTERFACE_VER_NAME.systemDlcFree(dlcHandle);
+            dlcHandle = nullptr;
+        }
+        if (sysLog && sysIface && sysIface->QNN_SYSTEM_INTERFACE_VER_NAME.systemLogFree) {
+            sysIface->QNN_SYSTEM_INTERFACE_VER_NAME.systemLogFree(sysLog);
+            sysLog = nullptr;
+        }
+        composedGraphs = nullptr;
+        numComposedGraphs = 0;
+        graphSlots.clear();
 
-        graphs_.push_back(std::move(gi));
+        if (backendLib) {
+            dlclose(backendLib);
+            backendLib = nullptr;
+            qnnIface = nullptr;
+        }
+        if (systemLib) {
+            dlclose(systemLib);
+            systemLib = nullptr;
+            sysIface = nullptr;
+        }
     }
+};
+
+// ---------------------------------------------------------------------------
+QairtRuntime::QairtRuntime() : impl_(new Impl()) {}
+QairtRuntime::~QairtRuntime() { cleanup(); delete impl_; }
+
+// 简单的 QNN 日志回调
+static void qnnLogCallback(const char* fmt,
+                           QnnLog_Level_t level,
+                           uint64_t /*timestamp*/,
+                           va_list argp) {
+    int prio = ANDROID_LOG_INFO;
+    switch (level) {
+        case QNN_LOG_LEVEL_ERROR: prio = ANDROID_LOG_ERROR; break;
+        case QNN_LOG_LEVEL_WARN:  prio = ANDROID_LOG_WARN;  break;
+        case QNN_LOG_LEVEL_INFO:  prio = ANDROID_LOG_INFO;  break;
+        default:                  prio = ANDROID_LOG_DEBUG; break;
+    }
+    __android_log_vprint(prio, "QNN", fmt, argp);
+}
+
+// 加载指定共享库（先 libSearchPath，再默认系统路径）
+static void* openLib(const char* name, const std::string& searchPath) {
+    if (!searchPath.empty()) {
+        std::string full = searchPath + "/" + name;
+        void* h = dlopen(full.c_str(), RTLD_NOW | RTLD_LOCAL);
+        if (h) return h;
+    }
+    return dlopen(name, RTLD_NOW | RTLD_LOCAL);
+}
+
+// ---------------------------------------------------------------------------
+// init：加载 libQnnSystem.so 并抽出 SystemInterface 表（还没绑到具体后端）
+// ---------------------------------------------------------------------------
+bool QairtRuntime::init(const std::string& libSearchPath) {
+    if (ready_) return true;
+
+    // 关键：所有 HTP 后端启动前必须先设 ADSP_LIBRARY_PATH，否则 FastRPC
+    // 找不到 vendor skel（跟 AIEngine 对齐）
+    const char* adspPath =
+        "/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp;/vendor/dsp/adsp;/system/lib/rfsa/adsp;/dsp";
+    setenv("ADSP_LIBRARY_PATH", adspPath, 1);
+    LOGI("ADSP_LIBRARY_PATH=%s", adspPath);
+
+    impl_->systemLib = openLib("libQnnSystem.so", libSearchPath);
+    if (!impl_->systemLib) {
+        LOGE("dlopen libQnnSystem.so 失败: %s", dlerror());
+        return false;
+    }
+
+    using SysProvidersFn =
+        Qnn_ErrorHandle_t (*)(const QnnSystemInterface_t***, uint32_t*);
+    auto sysProviders = reinterpret_cast<SysProvidersFn>(
+        dlsym(impl_->systemLib, "QnnSystemInterface_getProviders"));
+    if (!sysProviders) {
+        LOGE("dlsym QnnSystemInterface_getProviders 失败: %s", dlerror());
+        return false;
+    }
+    const QnnSystemInterface_t** providers = nullptr;
+    uint32_t numProviders = 0;
+    Qnn_ErrorHandle_t s = sysProviders(&providers, &numProviders);
+    if (s != QNN_SUCCESS || numProviders == 0 || !providers || !providers[0]) {
+        LOGE("QnnSystemInterface_getProviders 返回失败: 0x%llx",
+             (unsigned long long)s);
+        return false;
+    }
+    impl_->sysIface = providers[0];
+    LOGI("QnnSystem 接口就绪, api=%u.%u.%u",
+         impl_->sysIface->systemApiVersion.major,
+         impl_->sysIface->systemApiVersion.minor,
+         impl_->sysIface->systemApiVersion.patch);
+
+    // 单独给 Sys 建 log（DLC 解析用）
+    auto sysLogCreate = impl_->sysIface->QNN_SYSTEM_INTERFACE_VER_NAME.systemLogCreate;
+    if (sysLogCreate) {
+        Qnn_ErrorHandle_t rs = sysLogCreate(qnnLogCallback, QNN_LOG_LEVEL_WARN,
+                                            &impl_->sysLog);
+        if (rs != QNN_SUCCESS) {
+            LOGW("systemLogCreate 失败: 0x%llx（继续，无日志）",
+                 (unsigned long long)rs);
+            impl_->sysLog = nullptr;
+        }
+    }
+
+    ready_ = true;
     return true;
 }
 
 // ---------------------------------------------------------------------------
-// execute: 对指定图执行一次推理
+// loadDlc：dlopen 后端 → 建 Log/Backend/Device/Context → DLC compose
+// ---------------------------------------------------------------------------
+bool QairtRuntime::loadDlc(const std::string& dlcPath, BackendType backend) {
+    if (!ready_ || !impl_->sysIface) {
+        LOGE("Runtime 未初始化，请先调用 init()");
+        return false;
+    }
+
+    // 切后端时先清掉旧的 backend/context/device
+    if (impl_->backendLib || impl_->backendHandle) {
+        if (impl_->contextHandle) {
+            impl_->qnnIface->QNN_INTERFACE_VER_NAME.contextFree(impl_->contextHandle, nullptr);
+            impl_->contextHandle = nullptr;
+        }
+        if (impl_->deviceHandle) {
+            impl_->qnnIface->QNN_INTERFACE_VER_NAME.deviceFree(impl_->deviceHandle);
+            impl_->deviceHandle = nullptr;
+        }
+        if (impl_->backendHandle) {
+            impl_->qnnIface->QNN_INTERFACE_VER_NAME.backendFree(impl_->backendHandle);
+            impl_->backendHandle = nullptr;
+        }
+        if (impl_->backendLog) {
+            impl_->qnnIface->QNN_INTERFACE_VER_NAME.logFree(impl_->backendLog);
+            impl_->backendLog = nullptr;
+        }
+        if (impl_->backendLib) {
+            dlclose(impl_->backendLib);
+            impl_->backendLib = nullptr;
+            impl_->qnnIface = nullptr;
+        }
+        impl_->graphSlots.clear();
+        impl_->composedGraphs = nullptr;
+        impl_->numComposedGraphs = 0;
+    }
+    impl_->currentBackend = backend;
+
+    // 1) 挑对应后端库
+    const char* backendLibName = nullptr;
+    switch (backend) {
+        case BackendType::CPU: backendLibName = "libQnnCpu.so"; break;
+        case BackendType::GPU: backendLibName = "libQnnGpu.so"; break;
+        case BackendType::HTP: backendLibName = "libQnnHtp.so"; break;
+        default:               backendLibName = "libQnnCpu.so"; break;
+    }
+    impl_->backendLib = openLib(backendLibName, "");
+    if (!impl_->backendLib) {
+        LOGE("dlopen %s 失败: %s", backendLibName, dlerror());
+        return false;
+    }
+
+    using BEProvidersFn = Qnn_ErrorHandle_t (*)(const QnnInterface_t***, uint32_t*);
+    auto beProviders = reinterpret_cast<BEProvidersFn>(
+        dlsym(impl_->backendLib, "QnnInterface_getProviders"));
+    if (!beProviders) {
+        LOGE("dlsym QnnInterface_getProviders 失败: %s", dlerror());
+        return false;
+    }
+    const QnnInterface_t** providers = nullptr;
+    uint32_t numProviders = 0;
+    Qnn_ErrorHandle_t s = beProviders(&providers, &numProviders);
+    if (s != QNN_SUCCESS || numProviders == 0 || !providers || !providers[0]) {
+        LOGE("QnnInterface_getProviders 失败: 0x%llx", (unsigned long long)s);
+        return false;
+    }
+    impl_->qnnIface = providers[0];
+    LOGI("%s 接口就绪, api=%u.%u.%u backend=%u",
+         backendLibName,
+         impl_->qnnIface->apiVersion.coreApiVersion.major,
+         impl_->qnnIface->apiVersion.coreApiVersion.minor,
+         impl_->qnnIface->apiVersion.coreApiVersion.patch,
+         impl_->qnnIface->backendId);
+
+    const auto& iface = impl_->qnnIface->QNN_INTERFACE_VER_NAME;
+
+    // 2) Log
+    if (iface.logCreate) {
+        Qnn_ErrorHandle_t rs = iface.logCreate(qnnLogCallback, QNN_LOG_LEVEL_WARN,
+                                               &impl_->backendLog);
+        if (rs != QNN_SUCCESS) {
+            LOGW("logCreate 失败: 0x%llx", (unsigned long long)rs);
+            impl_->backendLog = nullptr;
+        }
+    }
+
+    // 3) Backend
+    s = iface.backendCreate(impl_->backendLog, nullptr, &impl_->backendHandle);
+    if (s != QNN_SUCCESS) {
+        LOGE("backendCreate 失败: 0x%llx", (unsigned long long)s);
+        return false;
+    }
+    LOGI("QnnBackend_create 成功");
+
+    // 4) Device（HTP 需要显式配置 signed PD + SoC model）
+    if (backend == BackendType::HTP) {
+        QnnHtpDevice_CustomConfig_t socCfg{};
+        socCfg.option = QNN_HTP_DEVICE_CONFIG_OPTION_SOC;
+        socCfg.socModel = kSocModel8845;
+
+        QnnHtpDevice_CustomConfig_t signedPdCfg{};
+        signedPdCfg.option = QNN_HTP_DEVICE_CONFIG_OPTION_SIGNEDPD;
+        signedPdCfg.useSignedProcessDomain.deviceId = 0;
+        signedPdCfg.useSignedProcessDomain.useSignedProcessDomain = true;
+
+        QnnDevice_Config_t socDevCfg{};
+        socDevCfg.option = QNN_DEVICE_CONFIG_OPTION_CUSTOM;
+        socDevCfg.customConfig = &socCfg;
+
+        QnnDevice_Config_t signedPdDevCfg{};
+        signedPdDevCfg.option = QNN_DEVICE_CONFIG_OPTION_CUSTOM;
+        signedPdDevCfg.customConfig = &signedPdCfg;
+
+        const QnnDevice_Config_t* deviceCfgs[] = {&socDevCfg, &signedPdDevCfg, nullptr};
+        if (iface.deviceCreate) {
+            s = iface.deviceCreate(impl_->backendLog, deviceCfgs, &impl_->deviceHandle);
+            if (s != QNN_SUCCESS) {
+                LOGE("HTP deviceCreate 失败: 0x%llx (socModel=%u signedPD=1)",
+                     (unsigned long long)s, kSocModel8845);
+                return false;
+            }
+            LOGI("HTP Device 创建成功 socModel=%u signedPD=1", kSocModel8845);
+        }
+    } else {
+        // CPU / GPU 直接建默认 device（可以 NULL）
+        if (iface.deviceCreate) {
+            s = iface.deviceCreate(impl_->backendLog, nullptr, &impl_->deviceHandle);
+            if (s != QNN_SUCCESS) {
+                LOGW("非 HTP deviceCreate 失败: 0x%llx（继续用 NULL device）",
+                     (unsigned long long)s);
+                impl_->deviceHandle = nullptr;
+            }
+        }
+    }
+
+    // 5) Context
+    s = iface.contextCreate(impl_->backendHandle,
+                            impl_->deviceHandle,
+                            nullptr, &impl_->contextHandle);
+    if (s != QNN_SUCCESS) {
+        LOGE("contextCreate 失败: 0x%llx", (unsigned long long)s);
+        return false;
+    }
+    LOGI("QnnContext_create 成功");
+
+    // 6) DLC 载入
+    auto dlcCreate = impl_->sysIface->QNN_SYSTEM_INTERFACE_VER_NAME.systemDlcCreateFromFile;
+    if (!dlcCreate) {
+        LOGE("libQnnSystem.so 不含 systemDlcCreateFromFile（版本过老？）");
+        return false;
+    }
+    s = dlcCreate(impl_->sysLog, dlcPath.c_str(), &impl_->dlcHandle);
+    if (s != QNN_SUCCESS || !impl_->dlcHandle) {
+        LOGE("systemDlcCreateFromFile(%s) 失败: 0x%llx",
+             dlcPath.c_str(), (unsigned long long)s);
+        return false;
+    }
+    LOGI("DLC 加载成功: %s", dlcPath.c_str());
+
+    // 7) composeGraphs：把 DLC 里的图编排到 context 上
+    auto composeGraphs = impl_->sysIface->QNN_SYSTEM_INTERFACE_VER_NAME.systemDlcComposeGraphs;
+    if (!composeGraphs) {
+        LOGE("libQnnSystem.so 不含 systemDlcComposeGraphs");
+        return false;
+    }
+    QnnSystemContext_GraphInfo_t* infos = nullptr;
+    uint32_t numGraphs = 0;
+    s = composeGraphs(impl_->dlcHandle,
+                      /*graphConfigs*/ nullptr,
+                      /*numGraphConfigs*/ 0,
+                      impl_->backendHandle,
+                      impl_->contextHandle,
+                      *impl_->qnnIface,   // 传整个 QnnInterface_t
+                      QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_1,
+                      &infos, &numGraphs);
+    if (s != QNN_SUCCESS || !infos || numGraphs == 0) {
+        LOGE("systemDlcComposeGraphs 失败: 0x%llx graphs=%p n=%u",
+             (unsigned long long)s, infos, numGraphs);
+        return false;
+    }
+    impl_->composedGraphs = infos;
+    impl_->numComposedGraphs = numGraphs;
+    LOGI("composeGraphs 成功: %u 个 graph", numGraphs);
+
+    // 8) 建立 GraphSlot：从每个 composed graph 拿到句柄（graphRetrieve）
+    graphs_.clear();
+    impl_->graphSlots.clear();
+    impl_->graphSlots.reserve(numGraphs);
+    for (uint32_t i = 0; i < numGraphs; ++i) {
+        const auto& info = infos[i];
+        if (info.version != QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_1) {
+            LOGW("graph[%u] 不是 V1 版本，跳过", i);
+            continue;
+        }
+        const auto& v1 = info.graphInfoV1;
+
+        Impl::GraphSlot slot;
+        slot.name = v1.graphName ? v1.graphName : "";
+
+        if (iface.graphRetrieve) {
+            Qnn_ErrorHandle_t rs = iface.graphRetrieve(impl_->contextHandle,
+                                                       slot.name.c_str(),
+                                                       &slot.handle);
+            if (rs != QNN_SUCCESS) {
+                LOGW("graphRetrieve(%s) 失败: 0x%llx",
+                     slot.name.c_str(), (unsigned long long)rs);
+            }
+        }
+
+        // composeGraphs 只添加节点，未 finalize —— 必须 finalize 才能 execute
+        if (slot.handle && iface.graphFinalize) {
+            Qnn_ErrorHandle_t rs = iface.graphFinalize(slot.handle, nullptr, nullptr);
+            if (rs != QNN_SUCCESS) {
+                LOGE("graphFinalize(%s) 失败: 0x%llx",
+                     slot.name.c_str(), (unsigned long long)rs);
+                return false;
+            }
+            LOGI("graphFinalize(%s) 成功", slot.name.c_str());
+        }
+
+        // 拷贝 tensor 元数据（Qnn_Tensor_t 是浅结构，dim/name 指针指到 DLC 内部内存）
+        slot.inputs.assign(v1.graphInputs,  v1.graphInputs  + v1.numGraphInputs);
+        slot.outputs.assign(v1.graphOutputs, v1.graphOutputs + v1.numGraphOutputs);
+
+        // 转成公开 GraphInfo（供 UI/JNI 使用）
+        GraphInfo gi;
+        gi.name = slot.name;
+        gi.inputs.reserve(v1.numGraphInputs);
+        for (uint32_t j = 0; j < v1.numGraphInputs; ++j) {
+            gi.inputs.push_back(makeTensorInfo(v1.graphInputs[j]));
+        }
+        gi.outputs.reserve(v1.numGraphOutputs);
+        for (uint32_t j = 0; j < v1.numGraphOutputs; ++j) {
+            gi.outputs.push_back(makeTensorInfo(v1.graphOutputs[j]));
+        }
+
+        impl_->graphSlots.push_back(std::move(slot));
+        graphs_.push_back(std::move(gi));
+    }
+    LOGI("图信息就绪: %zu 个", graphs_.size());
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// execute：绑定输入/输出 buffer，调用 graphExecute
 // ---------------------------------------------------------------------------
 InferenceResult QairtRuntime::execute(const std::string& graphName,
                                        const std::vector<std::vector<uint8_t>>& inputs) {
     InferenceResult result;
     result.graphName = graphName;
-    if (!ready_ || !impl_->qairtIface) {
-        result.error = "Runtime 未就绪";
+    if (!ready_ || !impl_->qnnIface || !impl_->contextHandle) {
+        result.error = "Runtime 未加载模型";
         return result;
     }
 
-    try {
-
-    const GraphInfo* gi = nullptr;
-    for (const auto& g : graphs_) {
-        if (g.name == graphName) { gi = &g; break; }
+    Impl::GraphSlot* slot = nullptr;
+    for (auto& s : impl_->graphSlots) {
+        if (s.name == graphName) { slot = &s; break; }
     }
-    if (!gi) {
+    if (!slot) {
         result.error = "未找到图: " + graphName;
         return result;
     }
-    if (inputs.size() != gi->inputs.size()) {
+    if (!slot->handle) {
+        result.error = "图句柄为空 (graphRetrieve 失败？)";
+        return result;
+    }
+    if (inputs.size() != slot->inputs.size()) {
         std::ostringstream oss;
-        oss << "输入数量不匹配: 期望 " << gi->inputs.size() << " 实际 " << inputs.size();
+        oss << "输入数量不匹配: 期望 " << slot->inputs.size()
+            << " 实际 " << inputs.size();
         result.error = oss.str();
         return result;
     }
 
-    // 重新获取图句柄
-    QairtSystem_Context_GraphInfoHandle_t gh = nullptr;
-    impl_->qairtIface->getGraphInfoAt(impl_->qairtHandle, 0, &gh);
-    if (!gh) {
-        result.error = "无法获取图句柄";
-        return result;
+    // 拷贝 tensor 数组（要修改 clientBuf 指向我们的 buffer，不能改原始 DLC 里的）
+    std::vector<Qnn_Tensor_t> inTensors  = slot->inputs;
+    std::vector<Qnn_Tensor_t> outTensors = slot->outputs;
+
+    // 输入 buffer 大小校验 + 绑定
+    for (size_t j = 0; j < inTensors.size(); ++j) {
+        Qnn_ClientBuffer_t* cb = nullptr;
+        if (auto* v1 = asV1Mut(inTensors[j])) cb = &v1->clientBuf;
+        else if (auto* v2 = asV2Mut(inTensors[j])) cb = &v2->clientBuf;
+        if (!cb) { result.error = "输入 tensor 版本不支持"; return result; }
+
+        TensorInfo ti = makeTensorInfo(inTensors[j]);
+        size_t exp = ti.totalBytes;
+        size_t act = inputs[j].size();
+        if (exp == 0 || act != exp) {
+            std::ostringstream oss;
+            oss << "输入[" << j << "] 大小不匹配 expected=" << exp
+                << " actual=" << act;
+            result.error = oss.str();
+            return result;
+        }
+        cb->data = const_cast<uint8_t*>(inputs[j].data());
+        cb->dataSize = static_cast<uint32_t>(act);
     }
 
-    // 准备输入
-    std::vector<QairtSystem_Context_TensorInfoHandle_t> inHandles;
-    std::vector<uint8_t*> inBufs;
-    inHandles.reserve(gi->inputs.size());
-    inBufs.reserve(gi->inputs.size());
-    for (uint32_t j = 0; j < gi->inputs.size(); ++j) {
-        QairtSystem_Context_TensorInfoHandle_t th = nullptr;
-        impl_->graphInfoIface->getInputAt(gh, j, &th);
-        inHandles.push_back(th);
-        inBufs.push_back(const_cast<uint8_t*>(inputs[j].data()));
+    // 输出 buffer 分配 + 绑定
+    result.outputs.resize(outTensors.size());
+    for (size_t j = 0; j < outTensors.size(); ++j) {
+        Qnn_ClientBuffer_t* cb = nullptr;
+        if (auto* v1 = asV1Mut(outTensors[j])) cb = &v1->clientBuf;
+        else if (auto* v2 = asV2Mut(outTensors[j])) cb = &v2->clientBuf;
+        if (!cb) { result.error = "输出 tensor 版本不支持"; return result; }
+
+        TensorInfo ti = makeTensorInfo(outTensors[j]);
+        if (ti.totalBytes == 0) {
+            std::ostringstream oss;
+            oss << "输出[" << j << "] totalBytes=0";
+            result.error = oss.str();
+            return result;
+        }
+        result.outputs[j].assign(ti.totalBytes, 0);
+        cb->data = result.outputs[j].data();
+        cb->dataSize = static_cast<uint32_t>(ti.totalBytes);
     }
 
-    // 准备输出
-    std::vector<QairtSystem_Context_TensorInfoHandle_t> outHandles;
-    std::vector<uint8_t*> outBufs;
-    std::vector<std::vector<uint8_t>> outStorage;
-    outHandles.reserve(gi->outputs.size());
-    outBufs.reserve(gi->outputs.size());
-    outStorage.resize(gi->outputs.size());
-    for (uint32_t j = 0; j < gi->outputs.size(); ++j) {
-        QairtSystem_Context_TensorInfoHandle_t th = nullptr;
-        impl_->graphInfoIface->getOutputAt(gh, j, &th);
-        outHandles.push_back(th);
-        outStorage[j].assign(gi->outputs[j].totalBytes, 0);
-        outBufs.push_back(outStorage[j].data());
-    }
-
-    // 执行推理并计时
+    const auto& iface = impl_->qnnIface->QNN_INTERFACE_VER_NAME;
     auto t0 = std::chrono::steady_clock::now();
-    Qairt_Status_t s = impl_->qairtIface->executeGraph(
-        impl_->qairtHandle,
-        graphName.c_str(),
-        inHandles.data(), inBufs.data(), static_cast<uint32_t>(inHandles.size()),
-        outHandles.data(), outBufs.data(), static_cast<uint32_t>(outHandles.size()));
+    Qnn_ErrorHandle_t s = iface.graphExecute(slot->handle,
+                                             inTensors.data(),
+                                             static_cast<uint32_t>(inTensors.size()),
+                                             outTensors.data(),
+                                             static_cast<uint32_t>(outTensors.size()),
+                                             /*profile*/ nullptr,
+                                             /*signal*/ nullptr);
     auto t1 = std::chrono::steady_clock::now();
     result.elapsedMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
-    if (s != QAIRT_SUCCESS) {
+    if (s != QNN_SUCCESS) {
         std::ostringstream oss;
-        oss << "executeGraph 失败: status=0x" << std::hex << s;
-        if (impl_->qairtIface->getLastError) {
-            const char* err = nullptr;
-            impl_->qairtIface->getLastError(impl_->qairtHandle, &err);
-            if (err) oss << " (" << err << ")";
-        }
+        oss << "graphExecute 失败: 0x" << std::hex << s;
         result.error = oss.str();
         return result;
     }
-
-    result.outputs = std::move(outStorage);
     LOGI("推理成功: %s, 耗时 %.3f ms", graphName.c_str(), result.elapsedMs);
     return result;
-
-    } catch (const std::exception& e) {
-        result.error = std::string("execute 捕获 C++ 异常: ") + e.what();
-        LOGE("%s", result.error.c_str());
-        return result;
-    } catch (...) {
-        result.error = "execute 捕获未知 C++ 异常";
-        LOGE("%s", result.error.c_str());
-        return result;
-    }
 }
 
-// ---------------------------------------------------------------------------
-// cleanup: 释放所有运行时资源
 // ---------------------------------------------------------------------------
 void QairtRuntime::cleanup() {
     if (impl_) impl_->releaseAll();
@@ -462,5 +637,11 @@ void QairtRuntime::cleanup() {
     graphs_.clear();
     backendBuildId_.clear();
 }
+
+// queryGraphInfos: 保留虚函数式接口签名（现在实际在 loadDlc 里完成）
+bool QairtRuntime::queryGraphInfos() { return true; }
+
+// readTensorInfo: 保留旧接口，兼容 header（当前实现不再需要）
+TensorInfo QairtRuntime::readTensorInfo(void* /*th*/) { return {}; }
 
 }  // namespace qnn_demo

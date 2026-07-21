@@ -33,3 +33,8 @@ local.properties
 # Log files
 *.log
 /qnndemo_logcat.txt
+
+# Local dev artifacts (jniLibs backups, vendor lib pulls, DLC backups)
+/app/src/main/jniLibs/_backup/
+/vendor_pull/
+*.dlc.bak

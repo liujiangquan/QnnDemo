@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+    xmlns:tools="http://schemas.android.com/tools"
+    android:sharedUserId="android.uid.system">
 
     <!-- 读取 DLC 模型文件（如从外部存储加载时） -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
@@ -15,6 +16,37 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.QnnDemo">
+
+        <!-- FastRPC 通道（DSP/CDSP RPC）—— 8845 走 aDSP 或 cDSP 都要开 -->
+        <uses-native-library
+            android:name="libadsprpc.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libcdsprpc.so"
+            android:required="false" />
+
+        <!-- QNN V81 vendor 库白名单（8845 的 Hexagon 是 V81）
+             ARM 侧：libQnnSystem/HtpPrepare/HtpV81Stub/QnnHtp 位于 /vendor/lib64/
+             DSP 侧：libQnnHtpV81Skel 位于 /vendor/lib/rfsa/adsp/，由 fastrpc 按
+                     ADSP_LIBRARY_PATH 拉起
+             这些库被 <uses-native-library> 声明后：
+             - APK 里不需要打包（linker 从 vendor 分区加载）
+             - app 命名空间会被 public.libraries.txt + manifest 白名单开放访问 -->
+        <uses-native-library
+            android:name="libQnnSystem.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libQnnHtpPrepare.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libQnnHtpV81Stub.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libQnnHtp.so"
+            android:required="false" />
+        <uses-native-library
+            android:name="libQnnHtpV81Skel.so"
+            android:required="false" />
 
         <activity
             android:name=".MainActivity"

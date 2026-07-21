@@ -38,21 +38,24 @@ if (-not (Test-Path $SdkPath)) {
     Write-Host "Please specify the correct QAIRT SDK path via -SdkPath."
     exit 1
 }
-$SdkInclude = Join-Path $SdkPath "include\QAIRT"
-$SdkLib     = Join-Path $SdkPath "lib\aarch64-android"
-if (-not (Test-Path $SdkInclude)) { Write-Err "Missing include\QAIRT directory"; exit 1 }
+$SdkIncludeQairt = Join-Path $SdkPath "include\QAIRT"
+$SdkIncludeQnn   = Join-Path $SdkPath "include\QNN"
+$SdkLib          = Join-Path $SdkPath "lib\aarch64-android"
+if (-not (Test-Path $SdkIncludeQairt)) { Write-Err "Missing include\QAIRT directory"; exit 1 }
+if (-not (Test-Path $SdkIncludeQnn))   { Write-Err "Missing include\QNN directory"; exit 1 }
 if (-not (Test-Path $SdkLib))     { Write-Err "Missing lib\aarch64-android directory"; exit 1 }
 Write-Ok "SDK path valid"
 
 # -----------------------------------------------------------------------------
-# 1. Copy QAIRT headers
+# 1. Copy QAIRT + QNN headers
+#    我们最终用 QNN Direct API，但 QAIRT 头依旧留着以便调试比较
 # -----------------------------------------------------------------------------
-Write-Step "Copy QAIRT headers to $IncludeDir"
+Write-Step "Copy QAIRT + QNN headers to $IncludeDir"
 if (Test-Path $IncludeDir) { Remove-Item -Recurse -Force $IncludeDir }
 New-Item -ItemType Directory -Force -Path $IncludeDir | Out-Null
 
-Copy-Item -Path $SdkInclude -Destination $IncludeDir -Recurse -Force
-# Flatten the nested QAIRT directory so includes work as "QairtCommon/QairtCommon.h"
+# QAIRT headers（flatten 掉嵌套 QAIRT/ 目录）
+Copy-Item -Path $SdkIncludeQairt -Destination $IncludeDir -Recurse -Force
 $Nested = Join-Path $IncludeDir "QAIRT"
 if (Test-Path $Nested) {
     Get-ChildItem -Path $Nested -Recurse -File | ForEach-Object {
@@ -64,6 +67,12 @@ if (Test-Path $Nested) {
     }
     Remove-Item -Recurse -Force $Nested
 }
+
+# QNN headers（保留完整 QNN/ 目录结构，因为 QnnInterface.h 用 "QnnCommon.h" 引用同目录头）
+$QnnDst = Join-Path $IncludeDir "QNN"
+New-Item -ItemType Directory -Force -Path $QnnDst | Out-Null
+Copy-Item -Path (Join-Path $SdkIncludeQnn "*") -Destination $QnnDst -Recurse -Force
+
 $headerCount = (Get-ChildItem -Path $IncludeDir -Recurse -Filter *.h).Count
 Write-Ok "Copied $headerCount header files"
 
@@ -73,10 +82,15 @@ Write-Ok "Copied $headerCount header files"
 Write-Step "Copy arm64-v8a prebuilt .so to $JniLibsDir"
 if (-not (Test-Path $JniLibsDir)) { New-Item -ItemType Directory -Force -Path $JniLibsDir | Out-Null }
 
-$RequiredLibs = @("libQairtSystem.so", "libQairtCpu.so")
+$RequiredLibs = @("libQnnSystem.so", "libQnnCpu.so")
 $OptionalLibs = @(
-    "libQairtGpu.so", "libQairtHtp.so",
-    "libQnnSystem.so", "libQnnCpu.so", "libQnnGpu.so", "libQnnHtp.so"
+    # GPU 后端（vendor 不提供）
+    "libQnnGpu.so",
+    # HTP 后端 —— 注意：SDK 版本的 libQnnHtp*/libQnnHtpV81Stub.so 会跟 vendor
+    # firmware 的 signed skel 版本不匹配（AEE_ENOSUCHMOD 0x80000406）。
+    # 生产环境应通过 <uses-native-library> 从 /vendor/lib64/ 加载 vendor 版本，
+    # 或运行 docs/pull_vendor_htp_libs.sh 覆盖为 vendor 版本。
+    "libQnnHtp.so", "libQnnHtpV81Stub.so", "libQnnHtpPrepare.so"
 )
 
 $copiedCount = 0
