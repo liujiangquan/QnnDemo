@@ -1,9 +1,5 @@
 plugins {
     alias(libs.plugins.android.application)
-    // 统签插件——远程 HTTP 完成私钥运算，本地无 keystore。
-    // signType 走项目根 gradle.properties 里的 unifiedsigning.signType=platform。
-    // 挂上后 assembleDebug/assembleRelease 自动集成远程签名（无需手写 signingConfigs）。
-    id("com.stepos.unifiedsigning.signing") version "1.0.5-alpha01-SNAPSHOT"
 }
 
 android {
@@ -31,22 +27,47 @@ android {
         // CMake 构建配置
         externalNativeBuild {
             cmake {
-                // C++ 标准与异常支持
                 cppFlags("-std=c++17 -fexceptions -frtti -O2")
-                // 传递给 native 代码的宏定义
                 arguments("-DANDROID_STL=c++_static")
             }
         }
     }
 
-    // 统签插件接管签名，不要写原生 signingConfigs（会跟统签插件的 packageXxx
-    // 任务重定向冲突，报 "in-process unified-apksig-signer failed: null"）
+    // AOSP 平台签名（本分支专属）
+    //
+    // ../keystore/platform.keystore 由 AOSP 公开的 platform.pk8 + platform.x509.pem
+    // 转换而来（build/target/product/security/），密码是 AOSP 默认的 "android"。
+    // 生产环境需要跟目标设备 firmware 使用的实际 platform key 一致；这里的 keystore
+    // 只有在目标设备也是 AOSP test-keys 签的（如 aosp_arm64 / aosp_car / 内部 AOSP
+    // build）时才能获得 android.uid.system 权限。
+    //
+    // 密码同样通过 gradle.properties / 环境变量覆盖，默认走 "android"：
+    //   RELEASE_STORE_PASSWORD, RELEASE_KEY_ALIAS, RELEASE_KEY_PASSWORD
+    val storePwd = System.getenv("RELEASE_STORE_PASSWORD")
+        ?: (project.findProperty("RELEASE_STORE_PASSWORD") as String? ?: "android")
+    val keyAlias  = System.getenv("RELEASE_KEY_ALIAS")
+        ?: (project.findProperty("RELEASE_KEY_ALIAS") as String? ?: "android")
+    val keyPwd    = System.getenv("RELEASE_KEY_PASSWORD")
+        ?: (project.findProperty("RELEASE_KEY_PASSWORD") as String? ?: "android")
+
+    signingConfigs {
+        create("platform") {
+            storeFile = rootProject.file("keystore/platform.keystore")
+            storePassword = storePwd
+            this.keyAlias = keyAlias
+            keyPassword = keyPwd
+        }
+    }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("platform")
+        }
         release {
             optimization {
                 enable = false
             }
+            signingConfig = signingConfigs.getByName("platform")
         }
     }
     compileOptions {
