@@ -38,15 +38,49 @@ class InferenceEngine(private val context: Context) : AutoCloseable {
         }
         // nativeLibraryDir 包含 jniLibs 中打包的 .so 文件
         val libDir = context.applicationInfo.nativeLibraryDir
-        // HTP 后端需要 unsigned skel 从 app 私有目录读取（/data/local/tmp 上 app 读不到，
-        // 只有 shell 能读）。给一个可读路径给 native，让它加进 ADSP_LIBRARY_PATH。
+
+        // unsigned PD 路径：把 assets/htp/*.so（QNN unsigned Hexagon skel）
+        // 拷到 app 私有 filesDir/htp/，native 层通过 ADSP_LIBRARY_PATH 让
+        // FastRPC loader 从这里加载 skel。生产设备 signed PD 场景下不需要
+        // 这份 skel（会用 /vendor/lib/rfsa/adsp/ 下 Qualcomm 签的 signed skel）。
         val htpSkelDir = "${context.filesDir.absolutePath}/htp"
         java.io.File(htpSkelDir).mkdirs()
+        copyAssetHtpSkelsIfNeeded(htpSkelDir)
+
         val searchPath = "$libDir;$htpSkelDir"
         initialized = native.nativeInit(handle, searchPath)
         if (!initialized) Log.e(TAG, "nativeInit 失败, searchPath=$searchPath")
         else Log.i(TAG, "nativeInit 成功, searchPath=$searchPath")
         return initialized
+    }
+
+    /**
+     * 把 assets/htp/ 下的所有 .so（unsigned skel）拷到 filesDir/htp/。
+     * 简单策略：目标文件不存在就拷。skel 通常 8-12MB，重复拷有点耗时但不出错。
+     *
+     * 注意：build.gradle.kts 里必须声明 `noCompress += listOf("so")`，否则
+     * .so 会被 aapt 压缩，无法通过 assets 顺序读（会 FileNotFoundException 或
+     * 大小不匹配）。
+     */
+    private fun copyAssetHtpSkelsIfNeeded(dstDir: String) {
+        try {
+            val assetSubdir = "htp"
+            val entries = context.assets.list(assetSubdir) ?: emptyArray()
+            for (name in entries) {
+                if (!name.endsWith(".so")) continue
+                val dst = File(dstDir, name)
+                if (dst.exists() && dst.length() > 0L) {
+                    Log.d(TAG, "skel 已存在，跳过: ${dst.absolutePath} (${dst.length()} bytes)")
+                    continue
+                }
+                context.assets.open("$assetSubdir/$name").use { input ->
+                    dst.outputStream().use { output -> input.copyTo(output) }
+                }
+                Log.i(TAG, "skel 已拷贝: ${dst.absolutePath} (${dst.length()} bytes)")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "拷贝 assets/htp/ 失败: ${e.message}", e)
+        }
     }
 
     /** 从 assets 复制 DLC 到缓存目录后加载 */

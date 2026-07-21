@@ -47,9 +47,6 @@
 
 namespace qnn_demo {
 
-// Snapdragon 8845 SoC model = 685（canoe / SC8480XP）
-static constexpr uint32_t kSocModel8845 = 685;
-
 // Qnn_DataType_t → 字节宽度
 static size_t dataTypeToBytes(Qnn_DataType_t dt) {
     switch (dt) {
@@ -237,12 +234,23 @@ static void* openLib(const char* name, const std::string& searchPath) {
 bool QairtRuntime::init(const std::string& libSearchPath) {
     if (ready_) return true;
 
-    // 关键：所有 HTP 后端启动前必须先设 ADSP_LIBRARY_PATH，否则 FastRPC
-    // 找不到 vendor skel（跟 AIEngine 对齐）
-    const char* adspPath =
-        "/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp;/vendor/dsp/adsp;/system/lib/rfsa/adsp;/dsp";
-    setenv("ADSP_LIBRARY_PATH", adspPath, 1);
-    LOGI("ADSP_LIBRARY_PATH=%s", adspPath);
+    // 关键：dlopen libQnnHtp.so 之前必须先 setenv ADSP_LIBRARY_PATH，
+    // 否则 DSP 侧 FastRPC loader 找不到 skel。
+    //
+    // 路径顺序（前面优先）：
+    //   1. libSearchPath —— app 传下来的 nativeLibDir + files/htp（unsigned PD 走这个）
+    //   2. vendor / system 系统路径 —— signed PD 走这条（生产设备用 Qualcomm 签的 skel）
+    //
+    // 用分号连接（跟 Android FastRPC loader 的默认解析一致）
+    std::string adspPath;
+    if (!libSearchPath.empty()) {
+        adspPath = libSearchPath;
+        adspPath += ";";
+    }
+    adspPath += "/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp;/vendor/dsp/adsp;"
+                "/system/lib/rfsa/adsp;/dsp";
+    setenv("ADSP_LIBRARY_PATH", adspPath.c_str(), 1);
+    LOGI("ADSP_LIBRARY_PATH=%s", adspPath.c_str());
 
     impl_->systemLib = openLib("libQnnSystem.so", libSearchPath);
     if (!impl_->systemLib) {
@@ -382,34 +390,39 @@ bool QairtRuntime::loadDlc(const std::string& dlcPath, BackendType backend) {
     }
     LOGI("QnnBackend_create 成功");
 
-    // 4) Device（HTP 需要显式配置 signed PD + SoC model）
+    // 4) Device
+    //
+    // HTP CustomConfig 策略：
+    //   - **不设 SoC model**：让 backend auto-detect，跨 8845/SM8735 等不同 SoC 通用
+    //   - **useSignedProcessDomain = false**：走 unsigned PD
+    //
+    // 为什么用 unsigned PD？
+    //   Signed PD 需要 Qualcomm 签的 skel（在 /vendor/lib/rfsa/adsp/），生产设备
+    //   的 vendor 分区不一定有 QNN skel（e.g. Meizu 22 vendor 只有相机 skel）。
+    //   Unsigned PD 允许 app 自带 SDK unsigned skel，跨设备通用性更高。
+    //
+    //   代价：需要设备内核允许 unsigned PD（大多数 debug / userdebug build 允许，
+    //   部分 user build 内核 disable_unsigned_pd=1 会拒 —— 那种设备只能走 signed
+    //   PD + vendor signed skel + platform signing 的老路子）。
     if (backend == BackendType::HTP) {
-        QnnHtpDevice_CustomConfig_t socCfg{};
-        socCfg.option = QNN_HTP_DEVICE_CONFIG_OPTION_SOC;
-        socCfg.socModel = kSocModel8845;
-
         QnnHtpDevice_CustomConfig_t signedPdCfg{};
         signedPdCfg.option = QNN_HTP_DEVICE_CONFIG_OPTION_SIGNEDPD;
         signedPdCfg.useSignedProcessDomain.deviceId = 0;
-        signedPdCfg.useSignedProcessDomain.useSignedProcessDomain = true;
-
-        QnnDevice_Config_t socDevCfg{};
-        socDevCfg.option = QNN_DEVICE_CONFIG_OPTION_CUSTOM;
-        socDevCfg.customConfig = &socCfg;
+        signedPdCfg.useSignedProcessDomain.useSignedProcessDomain = false;
 
         QnnDevice_Config_t signedPdDevCfg{};
         signedPdDevCfg.option = QNN_DEVICE_CONFIG_OPTION_CUSTOM;
         signedPdDevCfg.customConfig = &signedPdCfg;
 
-        const QnnDevice_Config_t* deviceCfgs[] = {&socDevCfg, &signedPdDevCfg, nullptr};
+        const QnnDevice_Config_t* deviceCfgs[] = {&signedPdDevCfg, nullptr};
         if (iface.deviceCreate) {
             s = iface.deviceCreate(impl_->backendLog, deviceCfgs, &impl_->deviceHandle);
             if (s != QNN_SUCCESS) {
-                LOGE("HTP deviceCreate 失败: 0x%llx (socModel=%u signedPD=1)",
-                     (unsigned long long)s, kSocModel8845);
+                LOGE("HTP deviceCreate 失败: 0x%llx (unsigned PD)",
+                     (unsigned long long)s);
                 return false;
             }
-            LOGI("HTP Device 创建成功 socModel=%u signedPD=1", kSocModel8845);
+            LOGI("HTP Device 创建成功（unsigned PD，SoC auto-detect）");
         }
     } else {
         // CPU / GPU 直接建默认 device（可以 NULL）

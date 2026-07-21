@@ -93,6 +93,15 @@ android {
         jniLibs {
             useLegacyPackaging = true
         }
+        // assets/htp/*.so（unsigned Hexagon skel）也不能压缩，
+        // 否则 Kotlin 拷贝时 assets.openFd 会 FileNotFoundException（只对
+        // uncompressed asset 生效），skel 拷不到 files/htp/，HTP 加载失败
+        resources {
+            excludes += listOf("META-INF/*")
+        }
+    }
+    androidResources {
+        noCompress += listOf("dlc", "so")
     }
 
     // 预编译 .so 与 DLC 模型放在 jniLibs / assets 中，不参与 lint
