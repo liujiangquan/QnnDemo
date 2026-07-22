@@ -5,6 +5,7 @@
 #include <chrono>
 #include <dlfcn.h>
 #include <cstdlib>  // setenv
+#include <fstream>  // std::ifstream 读 Genie JSON config
 
 #include "Genie/GenieCommon.h"
 #include "Genie/GenieDialog.h"
@@ -177,10 +178,25 @@ bool LlmRuntime::loadModel(const std::string& configPath) {
         loaded_ = false;
     }
 
+    // Genie API 期望 JSON 内容字符串，不是文件路径！先读文件到内存。
+    std::ifstream jsonStream(configPath);
+    if (!jsonStream.is_open()) {
+        LOGE("无法打开 config 文件: %s", configPath.c_str());
+        return false;
+    }
+    std::string jsonContent((std::istreambuf_iterator<char>(jsonStream)),
+                             std::istreambuf_iterator<char>());
+    jsonStream.close();
+    if (jsonContent.empty()) {
+        LOGE("config 文件为空: %s", configPath.c_str());
+        return false;
+    }
+
     Genie_Status_t s = impl_->createConfigFromJson(
-        configPath.c_str(), &impl_->configHandle);
+        jsonContent.c_str(), &impl_->configHandle);
     if (s != GENIE_STATUS_SUCCESS || !impl_->configHandle) {
-        LOGE("GenieDialogConfig_createFromJson(%s) 失败: %d", configPath.c_str(), s);
+        LOGE("GenieDialogConfig_createFromJson 失败: %d (config: %s)",
+             s, configPath.c_str());
         return false;
     }
     LOGI("Config 已加载: %s", configPath.c_str());
@@ -207,6 +223,12 @@ struct CallbackContext {
     int tokenCount = 0;
     std::atomic<bool>* stopFlag = nullptr;
     bool aborted = false;
+    // 用于 callback 内主动 ABORT：Genie 不接受 per-query maxTokens，
+    // 只能靠 callback 累计 token 后调 dialogSignal(ABORT) 提前收敛。
+    int maxTokens = INT32_MAX;
+    GenieDialog_Handle_t dialogHandle = nullptr;
+    Genie_Status_t (*dialogSignal)(GenieDialog_Handle_t, GenieDialog_Action_t) = nullptr;
+    bool signalSent = false;
 };
 
 // 签名对齐 GenieDialog_QueryCallback_t:
@@ -228,6 +250,13 @@ void genieQueryCb(const char* response,
         ctx->tokenCb(tok);
         ++ctx->tokenCount;
     }
+
+    // 达到 maxTokens 主动 signal ABORT（只发一次，Genie 不允许重复 signal）
+    if (!ctx->signalSent && ctx->tokenCount >= ctx->maxTokens
+        && ctx->dialogSignal && ctx->dialogHandle) {
+        ctx->dialogSignal(ctx->dialogHandle, GENIE_DIALOG_ACTION_ABORT);
+        ctx->signalSent = true;
+    }
 }
 
 }  // anonymous namespace
@@ -244,7 +273,9 @@ GenerateResult LlmRuntime::generate(const std::string& prompt,
     }
 
     stopRequested_ = false;
-    CallbackContext ctx{tokenCb, errorCb, 0, &stopRequested_, false};
+    CallbackContext ctx{tokenCb, errorCb, 0, &stopRequested_, false,
+                        params.maxTokens > 0 ? params.maxTokens : INT32_MAX,
+                        impl_->dialogHandle, impl_->dialogSignal, false};
 
     auto t0 = std::chrono::steady_clock::now();
     Genie_Status_t s = impl_->dialogQuery(
@@ -267,10 +298,15 @@ GenerateResult LlmRuntime::generate(const std::string& prompt,
         r.stoppedReason = "ERROR";
         r.error = std::string("GenieDialog_query 失败: ") + std::to_string(s);
         if (errorCb) errorCb(r.error);
-    } else if (ctx.aborted || stopRequested_) {
+    } else if (stopRequested_) {
+        // 用户主动 stop() 优先，即使同时也可能触发了 maxTokens ABORT
         r.stoppedReason = "USER_CANCEL";
-    } else if (ctx.tokenCount >= params.maxTokens) {
+    } else if (ctx.signalSent || ctx.tokenCount >= params.maxTokens) {
+        // callback 里因 maxTokens 主动 signal ABORT，Genie 会回 aborted，
+        // 但 stoppedReason 语义仍是 MAX_TOKENS
         r.stoppedReason = "MAX_TOKENS";
+    } else if (ctx.aborted) {
+        r.stoppedReason = "USER_CANCEL";
     } else {
         r.stoppedReason = "EOS";
     }

@@ -38,3 +38,4 @@ local.properties
 /app/src/main/jniLibs/_backup/
 /vendor_pull/
 *.dlc.bak
+*.sdk248.bak
