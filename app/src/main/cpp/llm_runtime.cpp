@@ -261,7 +261,9 @@ GenerateResult LlmRuntime::generate(const std::string& prompt,
         ? (1000.0 * ctx.tokenCount / r.elapsedMs)
         : 0.0;
 
-    if (s != GENIE_STATUS_SUCCESS && s != GENIE_STATUS_WARNING_CONTEXT_EXCEEDED) {
+    if (s != GENIE_STATUS_SUCCESS
+        && s != GENIE_STATUS_WARNING_CONTEXT_EXCEEDED
+        && s != GENIE_STATUS_WARNING_ABORTED) {
         r.stoppedReason = "ERROR";
         r.error = std::string("GenieDialog_query 失败: ") + std::to_string(s);
         if (errorCb) errorCb(r.error);
@@ -281,7 +283,9 @@ GenerateResult LlmRuntime::generate(const std::string& prompt,
 
 void LlmRuntime::stop() {
     stopRequested_ = true;
-    // 尝试通知 Genie 主动中断生成（T10 会完善）
+    // 通知 Genie 主动中断生成（GenieDialog_signal ABORT）—— 让 dialogQuery
+    // 尽快返回。stopRequested_ 是软 flag，dialogSignal 是硬 ABORT，两者
+    // 组合让 stoppedReason 能正确判为 USER_CANCEL。
     if (impl_->dialogSignal && impl_->dialogHandle) {
         impl_->dialogSignal(impl_->dialogHandle, GENIE_DIALOG_ACTION_ABORT);
     }
