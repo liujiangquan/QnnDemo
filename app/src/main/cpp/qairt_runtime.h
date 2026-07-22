@@ -22,6 +22,8 @@
 #include <string>
 #include <vector>
 
+#include "base_inference_runtime.h"
+
 namespace qnn_demo {
 
 // 后端类型（对应 QAIRT_System_BackendType_t 的枚举值）
@@ -61,17 +63,17 @@ struct InferenceResult {
     std::string error;
 };
 
-class QairtRuntime {
+class QairtRuntime : public BaseInferenceRuntime {
 public:
     QairtRuntime();
-    ~QairtRuntime();
+    ~QairtRuntime() override;
 
     QairtRuntime(const QairtRuntime&) = delete;
     QairtRuntime& operator=(const QairtRuntime&) = delete;
 
     // 初始化：dlopen libQairtSystem.so 并加载所需接口表
     // libSearchPath 为额外搜索路径（一般为 APP 的 nativeLibraryDir）
-    bool init(const std::string& libSearchPath = "");
+    bool init(const std::string& libSearchPath = "") override;
 
     // 加载 DLC 模型并构建运行时
     // dlcPath: DLC 文件绝对路径
@@ -79,7 +81,7 @@ public:
     bool loadDlc(const std::string& dlcPath, BackendType backend);
 
     // 释放运行时资源
-    void cleanup();
+    void cleanup() override;
 
     // 查询图信息
     const std::vector<GraphInfo>& graphInfos() const { return graphs_; }
@@ -93,7 +95,7 @@ public:
     // QAIRT 后端库构建版本号
     std::string backendBuildId() const { return backendBuildId_; }
 
-    bool isReady() const { return ready_; }
+    bool isReady() const override { return ready_; }
 
 private:
     // PIMPL 风格：将 QAIRT 函数指针表与句柄隐藏到实现文件中
