@@ -74,6 +74,11 @@ android {
         }
     }
 
+    // DLC (CNN 模型) 和 bin (Genie context binary) 不压缩，assets 里保持原样
+    androidResources {
+        noCompress += listOf("dlc", "bin")
+    }
+
     // 预编译 .so 与 DLC 模型放在 jniLibs / assets 中，不参与 lint
     lint {
         abortOnError = false

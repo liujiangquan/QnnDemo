@@ -17,6 +17,10 @@ DEVICE_TMP="/data/local/tmp/qnn_test"
 mkdir -p "$LOG_DIR"
 
 filter_test="${1:-}"
+# llm* 前缀走 LlmE2ETest（LLM Genie chat 场景），其它走 BackendE2ETest（CNN 场景）
+if [[ "$filter_test" == llm* ]]; then
+    CLASS="com.breeze.qnn.LlmE2ETest"
+fi
 test_arg=""
 if [ -n "$filter_test" ]; then
     test_arg="-Pandroid.testInstrumentationRunnerArguments.class=$CLASS#$filter_test"
