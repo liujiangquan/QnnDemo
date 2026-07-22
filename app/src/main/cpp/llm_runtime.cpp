@@ -2,6 +2,7 @@
 #include "llm_runtime.h"
 
 #include <android/log.h>
+#include <chrono>
 #include <dlfcn.h>
 #include <cstdlib>  // setenv
 
@@ -22,6 +23,15 @@ using GenieDialog_CreateFn = Genie_Status_t (*)(
     const GenieDialogConfig_Handle_t configHandle, GenieDialog_Handle_t* dialogHandle);
 using GenieDialog_FreeFn = Genie_Status_t (*)(
     const GenieDialog_Handle_t dialogHandle);
+using GenieDialog_QueryFn = Genie_Status_t (*)(
+    const GenieDialog_Handle_t dialogHandle,
+    const char* queryStr,
+    const GenieDialog_SentenceCode_t sentenceCode,
+    const GenieDialog_QueryCallback_t callback,
+    const void* userData);
+using GenieDialog_SignalFn = Genie_Status_t (*)(
+    const GenieDialog_Handle_t dialogHandle,
+    const GenieDialog_Action_t action);
 
 namespace qnn_demo {
 
@@ -35,6 +45,8 @@ struct LlmRuntime::Impl {
     // Dialog API
     GenieDialog_CreateFn dialogCreate = nullptr;
     GenieDialog_FreeFn   dialogFree   = nullptr;
+    GenieDialog_QueryFn  dialogQuery  = nullptr;
+    GenieDialog_SignalFn  dialogSignal = nullptr;
 
     // 运行时 handles（Task 8/9 用）
     GenieDialogConfig_Handle_t configHandle = nullptr;
@@ -106,6 +118,12 @@ bool LlmRuntime::init(const std::string& libSearchPath) {
     impl_->dialogFree =
         reinterpret_cast<GenieDialog_FreeFn>(
             sym("GenieDialog_free"));
+    impl_->dialogQuery =
+        reinterpret_cast<GenieDialog_QueryFn>(
+            sym("GenieDialog_query"));
+    impl_->dialogSignal =
+        reinterpret_cast<GenieDialog_SignalFn>(
+            sym("GenieDialog_signal"));
 
     if (!impl_->createConfigFromJson || !impl_->dialogCreate) {
         LOGE("Genie API 必需入口缺失（createConfigFromJson=%p dialogCreate=%p）",
@@ -135,6 +153,8 @@ void LlmRuntime::cleanup() {
     impl_->freeConfig           = nullptr;
     impl_->dialogCreate         = nullptr;
     impl_->dialogFree           = nullptr;
+    impl_->dialogQuery          = nullptr;
+    impl_->dialogSignal         = nullptr;
     ready_ = false;
     loaded_ = false;
 }
@@ -178,16 +198,93 @@ bool LlmRuntime::loadModel(const std::string& configPath) {
     return true;
 }
 
-GenerateResult LlmRuntime::generate(const std::string&,
-                                    const SamplingParams&,
-                                    TokenCallback,
+namespace {
+
+// Genie tokenCallback 需要 C 函数入口，从 user_data 反查回 C++ TokenCallback
+struct CallbackContext {
+    TokenCallback tokenCb;
+    ErrorCallback errorCb;
+    int tokenCount = 0;
+    std::atomic<bool>* stopFlag = nullptr;
+    bool aborted = false;
+};
+
+// 签名对齐 GenieDialog_QueryCallback_t:
+//   void (*)(const char* response, GenieDialog_SentenceCode_t sentenceCode, const void* userData)
+void genieQueryCb(const char* response,
+                  const GenieDialog_SentenceCode_t sentenceCode,
+                  const void* userData) {
+    auto* ctx = const_cast<CallbackContext*>(
+        reinterpret_cast<const CallbackContext*>(userData));
+    if (!ctx) return;
+
+    if (sentenceCode == GENIE_DIALOG_SENTENCE_ABORT) {
+        ctx->aborted = true;
+        return;
+    }
+
+    if (response && ctx->tokenCb) {
+        std::string tok(response);
+        ctx->tokenCb(tok);
+        ++ctx->tokenCount;
+    }
+}
+
+}  // anonymous namespace
+
+GenerateResult LlmRuntime::generate(const std::string& prompt,
+                                    const SamplingParams& params,
+                                    TokenCallback tokenCb,
                                     ErrorCallback errorCb) {
     GenerateResult r;
-    r.error = "generate 尚未实现（Task 9）";
-    if (errorCb) errorCb(r.error);
+    if (!loaded_ || !impl_->dialogQuery) {
+        r.error = "模型未加载";
+        if (errorCb) errorCb(r.error);
+        return r;
+    }
+
+    stopRequested_ = false;
+    CallbackContext ctx{tokenCb, errorCb, 0, &stopRequested_, false};
+
+    auto t0 = std::chrono::steady_clock::now();
+    Genie_Status_t s = impl_->dialogQuery(
+        impl_->dialogHandle,
+        prompt.c_str(),
+        GENIE_DIALOG_SENTENCE_COMPLETE,
+        genieQueryCb,
+        &ctx);
+    auto t1 = std::chrono::steady_clock::now();
+
+    r.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+    r.tokensGenerated = ctx.tokenCount;
+    r.tokensPerSec = r.elapsedMs > 0
+        ? (1000.0 * ctx.tokenCount / r.elapsedMs)
+        : 0.0;
+
+    if (s != GENIE_STATUS_SUCCESS && s != GENIE_STATUS_WARNING_CONTEXT_EXCEEDED) {
+        r.stoppedReason = "ERROR";
+        r.error = std::string("GenieDialog_query 失败: ") + std::to_string(s);
+        if (errorCb) errorCb(r.error);
+    } else if (ctx.aborted || stopRequested_) {
+        r.stoppedReason = "USER_CANCEL";
+    } else if (ctx.tokenCount >= params.maxTokens) {
+        r.stoppedReason = "MAX_TOKENS";
+    } else {
+        r.stoppedReason = "EOS";
+    }
+
+    LOGI("generate 结束: tokens=%d elapsed=%lldms speed=%.1f tok/s reason=%s",
+         r.tokensGenerated, (long long)r.elapsedMs, r.tokensPerSec,
+         r.stoppedReason.c_str());
     return r;
 }
 
-void LlmRuntime::stop() { stopRequested_ = true; }
+void LlmRuntime::stop() {
+    stopRequested_ = true;
+    // 尝试通知 Genie 主动中断生成（T10 会完善）
+    if (impl_->dialogSignal && impl_->dialogHandle) {
+        impl_->dialogSignal(impl_->dialogHandle, GENIE_DIALOG_ACTION_ABORT);
+    }
+}
 
 }  // namespace qnn_demo
