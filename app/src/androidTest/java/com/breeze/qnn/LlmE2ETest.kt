@@ -44,7 +44,7 @@ class LlmE2ETest {
 
     @After fun teardown() { backend.close() }
 
-    @Test fun llmLoadAndPrefill() = runBlocking {
+    @Test fun llmLoadAndPrefill(): Unit = runBlocking {
         withTimeout(30_000L) {
             val ms = measureTimeMillis { assertTrue("loadModel 应返回 true", backend.loadModel(MODEL_ID)) }
             assertTrue("loadModel 耗时 ${ms}ms 应 ≤ 10s", ms <= 10_000)
@@ -52,7 +52,7 @@ class LlmE2ETest {
         }
     }
 
-    @Test fun llmGenerate() = runBlocking {
+    @Test fun llmGenerate(): Unit = runBlocking {
         withTimeout(60_000L) {
             backend.loadModel(MODEL_ID)
             val tokens = StringBuilder()
@@ -75,7 +75,7 @@ class LlmE2ETest {
         }
     }
 
-    @Test fun llmStop() = runBlocking {
+    @Test fun llmStop(): Unit = runBlocking {
         withTimeout(60_000L) {
             backend.loadModel(MODEL_ID)
             val job = launch {
@@ -92,7 +92,7 @@ class LlmE2ETest {
         }
     }
 
-    @Test fun llmMultiTurn() = runBlocking {
+    @Test fun llmMultiTurn(): Unit = runBlocking {
         withTimeout(60_000L) {
             backend.loadModel(MODEL_ID)
             var round1 = ""
