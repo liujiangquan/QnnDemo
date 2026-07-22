@@ -61,6 +61,10 @@ class LlmBackend(private val context: Context) : AutoCloseable {
 
     /**
      * 执行推理生成（挂起在 Dispatchers.IO，通过回调逐 token 输出）。
+     *
+     * 默认给 prompt 套 Qwen3 chat template（`<|im_start|>...<|im_end|>\n<|im_start|>assistant\n`），
+     * 让 instruct-tuned 模型进入"回答"而非"续写"模式。已经带 `<|im_start|>` 的 prompt 会原样透传，
+     * 上层想手工组多轮 / 加 system prompt 时可以直接传完整拼好的字符串。
      */
     suspend fun generate(
         prompt: String,
@@ -70,6 +74,7 @@ class LlmBackend(private val context: Context) : AutoCloseable {
         onError: (String) -> Unit,
     ) = withContext(Dispatchers.IO) {
         if (!loaded) { onError("模型未加载"); return@withContext }
+        val wrapped = wrapChatTemplate(prompt)
         var errored = false
         val cb = object : LlmNative.TokenCallback {
             override fun onToken(tokenText: String) { onToken(tokenText) }
@@ -79,7 +84,7 @@ class LlmBackend(private val context: Context) : AutoCloseable {
             }
         }
         val resultJson = native.nativeGenerate(
-            handle, prompt,
+            handle, wrapped,
             params.temperature, params.topP, params.topK,
             params.maxTokens, params.seed, cb
         )
@@ -91,6 +96,14 @@ class LlmBackend(private val context: Context) : AutoCloseable {
             onComplete(stats)
         }
     }
+
+    /**
+     * Qwen3-Instruct 的 chat template。已经带 `<|im_start|>` 视为用户自己拼好，不再包一层。
+     * 保留 <think> 阶段（reasoning model 特性），上层若不需要可增大 maxTokens 或后续加过滤。
+     */
+    private fun wrapChatTemplate(prompt: String): String =
+        if (prompt.contains("<|im_start|>")) prompt
+        else "<|im_start|>$prompt<|im_end|>\n<|im_start|>assistant\n"
 
     /** 中断正在执行的生成 */
     fun stop() { if (handle != 0L) native.nativeStop(handle) }
