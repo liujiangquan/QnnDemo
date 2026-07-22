@@ -31,6 +31,8 @@ class LlmBackend(private val context: Context) : AutoCloseable {
         File(htpDir).mkdirs()
         val searchPath = "$libDir;$htpDir"
         initialized = native.nativeInit(handle, searchPath)
+        if (!initialized) Log.e(TAG, "nativeInit 失败, searchPath=$searchPath")
+        else Log.i(TAG, "nativeInit 成功, searchPath=$searchPath")
         return initialized
     }
 
@@ -68,17 +70,26 @@ class LlmBackend(private val context: Context) : AutoCloseable {
         onError: (String) -> Unit,
     ) = withContext(Dispatchers.IO) {
         if (!loaded) { onError("模型未加载"); return@withContext }
+        var errored = false
         val cb = object : LlmNative.TokenCallback {
             override fun onToken(tokenText: String) { onToken(tokenText) }
-            override fun onError(message: String) { onError(message) }
+            override fun onError(message: String) {
+                errored = true
+                onError(message)
+            }
         }
         val resultJson = native.nativeGenerate(
             handle, prompt,
             params.temperature, params.topP, params.topK,
             params.maxTokens, params.seed, cb
         )
-        val stats = parseStats(resultJson)
-        onComplete(stats)
+        // 如果 native 层通过 callback 报了错，就不再调 onComplete；
+        // 否则解析 JSON 汇报 stats。JSON 里的 stoppedReason=ERROR 也会走 onComplete
+        // 让 UI 层看到（业务决定是否显示"生成失败"）。
+        if (!errored) {
+            val stats = parseStats(resultJson)
+            onComplete(stats)
+        }
     }
 
     /** 中断正在执行的生成 */
@@ -91,11 +102,17 @@ class LlmBackend(private val context: Context) : AutoCloseable {
 
     private fun parseStats(json: String): GenerateStats {
         val o = JSONObject(json)
+        val reasonStr = o.optString("stoppedReason", "ERROR")
+        val reason = try {
+            StopReason.valueOf(reasonStr)
+        } catch (_: IllegalArgumentException) {
+            StopReason.ERROR
+        }
         return GenerateStats(
             elapsedMs = o.optLong("elapsedMs", 0),
             tokensGenerated = o.optInt("tokensGenerated", 0),
             tokensPerSec = o.optDouble("tokensPerSec", 0.0),
-            stoppedReason = StopReason.valueOf(o.optString("stoppedReason", "ERROR")),
+            stoppedReason = reason,
         )
     }
 
