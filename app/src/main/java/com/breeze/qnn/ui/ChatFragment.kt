@@ -22,6 +22,8 @@ class ChatFragment : Fragment() {
     private lateinit var btnSend: Button
     private lateinit var btnStop: Button
     private lateinit var banner: TextView
+    /** true 时 token 流入自动滚到底；用户往上滑就变 false，回到底部再变 true。 */
+    private var autoScroll: Boolean = true
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View =
         inflater.inflate(R.layout.fragment_chat, container, false)
@@ -36,6 +38,16 @@ class ChatFragment : Fragment() {
         adapter = ChatAdapter()
         rv.layoutManager = LinearLayoutManager(requireContext())
         rv.adapter = adapter
+        // 关闭 item 动画，避免流式 notifyItemChanged 每帧触发变高动画 → 视觉抖动
+        rv.itemAnimator = null
+        // 监听用户是否手动往上滑，滑离底部就停止 autoScroll；滑回底部恢复。
+        rv.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(v: RecyclerView, dx: Int, dy: Int) {
+                val lm = v.layoutManager as LinearLayoutManager
+                val lastVisible = lm.findLastVisibleItemPosition()
+                autoScroll = lastVisible >= adapter.itemCount - 1
+            }
+        })
 
         // Render existing history messages
         viewModel.messages.forEach { adapter.append(it) }
@@ -83,9 +95,13 @@ class ChatFragment : Fragment() {
                         if (adapter.itemCount <= idx) {
                             adapter.append(viewModel.messages[idx - 1])  // user
                             adapter.append(viewModel.messages[idx])       // assistant
+                            autoScroll = true  // 新一轮开始默认粘底
                         }
                         adapter.notifyItemChanged(idx)
-                        rv.smoothScrollToPosition(adapter.itemCount - 1)
+                        // 用 scrollToPosition 走瞬时跳而不是 smoothScrollToPosition ——
+                        // 流式 token 每 ~38ms 一次，smooth 动画会互相打断造成抖。
+                        // 只有用户没手动往上滑时才自动粘底。
+                        if (autoScroll) rv.scrollToPosition(adapter.itemCount - 1)
                     }
                 },
                 onComplete = { idx ->
