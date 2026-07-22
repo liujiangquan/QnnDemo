@@ -25,6 +25,9 @@ bool LlmRuntime::init(const std::string& /*libSearchPath*/) {
 }
 
 void LlmRuntime::cleanup() {
+    // TODO(T6): 释放 impl_ 里的 Genie 句柄 —— configHandle / dialogHandle
+    //   目前 Impl 只有 genieLib，析构函数会 dlclose；但 reinit 场景下需要在
+    //   这里 dlclose + 置 nullptr，避免二次 init 泄漏。T6 dlopen 落地时补齐。
     ready_ = false;
     loaded_ = false;
 }

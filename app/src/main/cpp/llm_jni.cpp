@@ -30,6 +30,8 @@ std::string jsonEscape(const std::string& s) {
         case '"':  o += "\\\""; break;
         case '\\': o += "\\\\"; break;
         case '\n': o += "\\n";  break;
+        case '\r': o += "\\r";  break;
+        case '\t': o += "\\t";  break;
         default:   o += c;      break;
     }
     return o;
@@ -56,7 +58,8 @@ Java_com_breeze_qnn_LlmNative_nativeCreate(JNIEnv*, jobject) {
 
 JNIEXPORT void JNICALL
 Java_com_breeze_qnn_LlmNative_nativeDestroy(JNIEnv*, jobject, jlong h) {
-    delete reinterpret_cast<LlmRuntime*>(h);
+    auto* rt = reinterpret_cast<LlmRuntime*>(h);
+    if (rt) { rt->cleanup(); delete rt; }
 }
 
 JNIEXPORT jboolean JNICALL
@@ -84,6 +87,7 @@ Java_com_breeze_qnn_LlmNative_nativeGenerate(JNIEnv* env, jobject, jlong h,
 
     auto* rt = reinterpret_cast<LlmRuntime*>(h);
     if (!rt) return env->NewStringUTF("{\"error\":\"invalid handle\"}");
+    if (!cb) return env->NewStringUTF("{\"error\":\"callback is null\"}");
 
     // 缓存 tokenCallback / errorCallback method IDs
     jclass cbCls = env->GetObjectClass(cb);
