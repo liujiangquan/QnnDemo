@@ -53,6 +53,13 @@ LlmRuntime::~LlmRuntime() { cleanup(); delete impl_; }
 bool LlmRuntime::init(const std::string& libSearchPath) {
     if (ready_) return true;
 
+    // 防御性清理：调用者若未 cleanup() 就重试 init()，之前那次的 genieLib 需先关
+    // 否则第二次 dlopen 会覆盖旧 handle 导致泄漏。
+    if (impl_->genieLib) {
+        dlclose(impl_->genieLib);
+        impl_->genieLib = nullptr;
+    }
+
     // setenv ADSP_LIBRARY_PATH（跟 QairtRuntime init 保持一致的顺序）
     // Genie 内部会加载 libQnnHtp.so，进而通过 fastrpc 找 skel
     std::string adspPath = libSearchPath;
