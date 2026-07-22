@@ -54,9 +54,12 @@ struct LlmRuntime::Impl {
     GenieDialog_Handle_t       dialogHandle = nullptr;
 
     ~Impl() {
+        // 注意：故意不 dlclose(genieLib)。Genie 内部 fastrpc dispatcher 会开
+        // 后台线程，dialogFree/configFree 不 join 它们；dlclose 后代码页
+        // 被 unmap，几分钟后那些线程醒来 → SIGSEGV @ unmapped PC。
+        // JNI-loaded so 按 Android 惯例应 process 生命周期内一直 hold。
         if (dialogHandle && dialogFree) dialogFree(dialogHandle);
         if (configHandle && freeConfig) freeConfig(configHandle);
-        if (genieLib) dlclose(genieLib);
     }
 };
 
@@ -66,12 +69,8 @@ LlmRuntime::~LlmRuntime() { cleanup(); delete impl_; }
 bool LlmRuntime::init(const std::string& libSearchPath) {
     if (ready_) return true;
 
-    // 防御性清理：调用者若未 cleanup() 就重试 init()，之前那次的 genieLib 需先关
-    // 否则第二次 dlopen 会覆盖旧 handle 导致泄漏。
-    if (impl_->genieLib) {
-        dlclose(impl_->genieLib);
-        impl_->genieLib = nullptr;
-    }
+    // libGenie.so 已经加载过（前一次 init 成功但被 cleanup 重置了 ready_）就复用，
+    // 不重复 dlopen 也不 dlclose —— Genie 后台线程还挂着，unmap 代码页会 SIGSEGV。
 
     // setenv ADSP_LIBRARY_PATH（跟 QairtRuntime init 保持一致的顺序）
     // Genie 内部会加载 libQnnHtp.so，进而通过 fastrpc 找 skel
@@ -82,23 +81,25 @@ bool LlmRuntime::init(const std::string& libSearchPath) {
     setenv("ADSP_LIBRARY_PATH", adspPath.c_str(), 1);
     LOGI("ADSP_LIBRARY_PATH=%s", adspPath.c_str());
 
-    // dlopen libGenie.so —— 先从 libSearchPath 第一段找（app nativeLibraryDir），
-    // 找不到再走系统默认路径
-    std::string genieLibPath;
-    if (!libSearchPath.empty()) {
-        size_t sep = libSearchPath.find(';');
-        std::string firstDir = (sep == std::string::npos)
-            ? libSearchPath
-            : libSearchPath.substr(0, sep);
-        genieLibPath = firstDir + "/libGenie.so";
-        impl_->genieLib = dlopen(genieLibPath.c_str(), RTLD_NOW | RTLD_LOCAL);
-    }
+    // dlopen libGenie.so —— 已加载过就复用（RTLD 内部 refcount，等同 no-op）。
+    // 先从 libSearchPath 第一段找（app nativeLibraryDir），找不到再走系统默认路径。
     if (!impl_->genieLib) {
-        impl_->genieLib = dlopen("libGenie.so", RTLD_NOW | RTLD_LOCAL);
-    }
-    if (!impl_->genieLib) {
-        LOGE("dlopen libGenie.so 失败: %s", dlerror());
-        return false;
+        std::string genieLibPath;
+        if (!libSearchPath.empty()) {
+            size_t sep = libSearchPath.find(';');
+            std::string firstDir = (sep == std::string::npos)
+                ? libSearchPath
+                : libSearchPath.substr(0, sep);
+            genieLibPath = firstDir + "/libGenie.so";
+            impl_->genieLib = dlopen(genieLibPath.c_str(), RTLD_NOW | RTLD_LOCAL);
+        }
+        if (!impl_->genieLib) {
+            impl_->genieLib = dlopen("libGenie.so", RTLD_NOW | RTLD_LOCAL);
+        }
+        if (!impl_->genieLib) {
+            LOGE("dlopen libGenie.so 失败: %s", dlerror());
+            return false;
+        }
     }
 
     // dlsym 出所有需要的入口
@@ -146,16 +147,9 @@ void LlmRuntime::cleanup() {
         impl_->freeConfig(impl_->configHandle);
         impl_->configHandle = nullptr;
     }
-    if (impl_->genieLib) {
-        dlclose(impl_->genieLib);
-        impl_->genieLib = nullptr;
-    }
-    impl_->createConfigFromJson = nullptr;
-    impl_->freeConfig           = nullptr;
-    impl_->dialogCreate         = nullptr;
-    impl_->dialogFree           = nullptr;
-    impl_->dialogQuery          = nullptr;
-    impl_->dialogSignal         = nullptr;
+    // 故意不 dlclose(genieLib) —— Genie 内部 fastrpc dispatcher 后台线程不 join，
+    // unmap 代码页后线程醒来 → SIGSEGV。genieLib 和 API 函数指针都保留，下次
+    // init() 直接复用。
     ready_ = false;
     loaded_ = false;
 }
