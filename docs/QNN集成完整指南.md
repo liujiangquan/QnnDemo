@@ -943,6 +943,23 @@ QNN_HTP_DEVICE_ARCH_V89 = 89,
 
 ---
 
+## LLM 集成（Qwen3-3B on 8845）
+
+在 CNN 集成基础上扩展 LLM 场景（Qwen3-3B via Qualcomm Genie 框架）：
+
+- `docs/superpowers/specs/2026-07-22-8845-llm-inference-design.md` — Design spec
+- `docs/superpowers/plans/2026-07-22-8845-llm-qwen3.md` — Implementation plan
+- `docs/LLM-baseline.md` — 性能 baseline
+- `docs/setup_qwen3_llm.sh` — 权重预置脚本（`bash docs/setup_qwen3_llm.sh <src_dir>`）
+- 跑 test：`bash docs/run_e2e_tests.sh llmGenerate`
+
+关键差异（vs CNN）：
+- 用 Genie 高层框架而非 QNN Direct API 直接编排 prefill/decode
+- 权重 1.5-2 GB 不进 APK，走 adb push 到 `filesDir/llm/qwen3-3b/`
+- signed PD + 8 MB VTCM 满配（unsigned PD 会导致 KV cache 分块，性能腰斩）
+
+---
+
 **文档版本**：v1.0，2026-07-21
 **作者**：QnnDemo 项目组
 **基线**：Snapdragon 8845 (Hexagon V81), Android 15, QAIRT SDK 2.48.40, vendor QNN 2.46.0
