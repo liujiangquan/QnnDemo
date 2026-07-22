@@ -119,4 +119,39 @@ class LlmE2ETest {
             Log.i(TAG, "PASS: multiTurn round1='${round1.take(80)}' round2='${round2.take(80)}'")
         }
     }
+
+    /**
+     * 强制开 thinking 模式（手拼 prompt 不预填空 <think></think>），
+     * 验证 UI 侧的 ThinkFilter 把 <think>...</think> 段吞掉。
+     */
+    @Test fun llmThinkFilter(): Unit = runBlocking {
+        withTimeout(120_000L) {
+            backend.loadModel(MODEL_ID)
+            // 完整 <|im_start|> prompt 会走 wrapChatTemplate 透传分支，
+            // assistant 位置不预填空 think 块 → Qwen3 会输出 <think>...</think>
+            val thinkingPrompt =
+                "<|im_start|>user\n介绍下苏州，一句话<|im_end|>\n<|im_start|>assistant\n"
+            val out = StringBuilder()
+            var stats: GenerateStats? = null
+            // maxTokens 1500 够跑完 think + 答案（~58s @ 26 tok/s）；
+            // 短了会 MAX_TOKENS 卡在 think 里，filter 就没内容可 emit。
+            backend.generate(thinkingPrompt,
+                SamplingParams(temperature = 0.7f, maxTokens = 1500),
+                onToken = { out.append(it) },
+                onComplete = { stats = it },
+                onError = {})
+            val text = out.toString()
+            assertTrue("UI 层不应看到 <think> 开标签，实际='${text.take(120)}'",
+                !text.contains("<think>"))
+            assertTrue("UI 层不应看到 </think> 闭标签，实际='${text.take(120)}'",
+                !text.contains("</think>"))
+            // think 段闭合了才应该有内容；若还卡在 think 里（MAX_TOKENS 提前收），filter drop 全部是正确行为
+            if (stats?.stoppedReason != StopReason.MAX_TOKENS) {
+                assertTrue("think 段闭合了 UI 应有实质内容，实际='${text.take(120)}'",
+                    text.trim().isNotEmpty())
+            }
+            Log.i(TAG, "PASS: thinkFilter stop=${stats?.stoppedReason} " +
+                "output='${text.take(120)}'")
+        }
+    }
 }

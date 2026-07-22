@@ -65,6 +65,9 @@ class LlmBackend(private val context: Context) : AutoCloseable {
      * 默认给 prompt 套 Qwen3 chat template（`<|im_start|>...<|im_end|>\n<|im_start|>assistant\n`），
      * 让 instruct-tuned 模型进入"回答"而非"续写"模式。已经带 `<|im_start|>` 的 prompt 会原样透传，
      * 上层想手工组多轮 / 加 system prompt 时可以直接传完整拼好的字符串。
+     *
+     * onToken 拿到的文本已经过 [ThinkFilter] 过滤，`<think>...</think>` 段和其后紧邻的
+     * 前导空白都会被吞掉；UI 只看到最终答案。stripThink=false 关掉过滤（诊断用）。
      */
     suspend fun generate(
         prompt: String,
@@ -72,12 +75,17 @@ class LlmBackend(private val context: Context) : AutoCloseable {
         onToken: (String) -> Unit,
         onComplete: (GenerateStats) -> Unit,
         onError: (String) -> Unit,
+        stripThink: Boolean = true,
     ) = withContext(Dispatchers.IO) {
         if (!loaded) { onError("模型未加载"); return@withContext }
         val wrapped = wrapChatTemplate(prompt)
         var errored = false
+        val filter = if (stripThink) ThinkFilter() else null
         val cb = object : LlmNative.TokenCallback {
-            override fun onToken(tokenText: String) { onToken(tokenText) }
+            override fun onToken(tokenText: String) {
+                if (filter != null) filter.feed(tokenText, onToken)
+                else onToken(tokenText)
+            }
             override fun onError(message: String) {
                 errored = true
                 onError(message)
@@ -88,6 +96,7 @@ class LlmBackend(private val context: Context) : AutoCloseable {
             params.temperature, params.topP, params.topK,
             params.maxTokens, params.seed, cb
         )
+        filter?.flush(onToken)
         // 如果 native 层通过 callback 报了错，就不再调 onComplete；
         // 否则解析 JSON 汇报 stats。JSON 里的 stoppedReason=ERROR 也会走 onComplete
         // 让 UI 层看到（业务决定是否显示"生成失败"）。
