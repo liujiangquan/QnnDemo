@@ -12,7 +12,6 @@ import androidx.fragment.app.viewModels
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.breeze.qnn.R
-import com.breeze.qnn.SamplingParams
 
 class ChatFragment : Fragment() {
 
@@ -77,7 +76,7 @@ class ChatFragment : Fragment() {
             if (text.isEmpty()) return@setOnClickListener
             etInput.text.clear()
 
-            val params = SamplingParams(temperature = 0.7f, maxTokens = 256)
+            val params = SamplingSettings(requireContext()).toSamplingParams()
             viewModel.send(text, params,
                 onTokenAppended = { idx ->
                     requireActivity().runOnUiThread {
