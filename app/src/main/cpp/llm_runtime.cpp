@@ -140,8 +140,42 @@ void LlmRuntime::cleanup() {
 }
 
 bool LlmRuntime::loadModel(const std::string& configPath) {
-    LOGI("LlmRuntime::loadModel(%s) 尚未实现（Task 8）", configPath.c_str());
-    return false;
+    if (!ready_ || !impl_->createConfigFromJson) {
+        LOGE("Runtime 未 init，请先 init()");
+        return false;
+    }
+    if (loaded_) {
+        LOGI("已加载模型，先释放旧的");
+        if (impl_->dialogHandle) {
+            impl_->dialogFree(impl_->dialogHandle);
+            impl_->dialogHandle = nullptr;
+        }
+        if (impl_->configHandle) {
+            impl_->freeConfig(impl_->configHandle);
+            impl_->configHandle = nullptr;
+        }
+        loaded_ = false;
+    }
+
+    Genie_Status_t s = impl_->createConfigFromJson(
+        configPath.c_str(), &impl_->configHandle);
+    if (s != GENIE_STATUS_SUCCESS || !impl_->configHandle) {
+        LOGE("GenieDialogConfig_createFromJson(%s) 失败: %d", configPath.c_str(), s);
+        return false;
+    }
+    LOGI("Config 已加载: %s", configPath.c_str());
+
+    s = impl_->dialogCreate(impl_->configHandle, &impl_->dialogHandle);
+    if (s != GENIE_STATUS_SUCCESS || !impl_->dialogHandle) {
+        LOGE("GenieDialog_create 失败: %d", s);
+        impl_->freeConfig(impl_->configHandle);
+        impl_->configHandle = nullptr;
+        return false;
+    }
+    LOGI("GenieDialog 就绪");
+
+    loaded_ = true;
+    return true;
 }
 
 GenerateResult LlmRuntime::generate(const std::string&,
