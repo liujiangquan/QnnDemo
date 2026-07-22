@@ -99,11 +99,16 @@ class LlmBackend(private val context: Context) : AutoCloseable {
 
     /**
      * Qwen3-Instruct 的 chat template。已经带 `<|im_start|>` 视为用户自己拼好，不再包一层。
-     * 保留 <think> 阶段（reasoning model 特性），上层若不需要可增大 maxTokens 或后续加过滤。
+     *
+     * **默认关闭 thinking mode**（预填空 `<think>\n\n</think>\n\n`）：
+     * Qwen3 见到已闭合的 think 块，会跳过 CoT 直接输出答案；chat 场景下用户要
+     * 直接答复不要看推理过程。要开思考模式的话上层自己拼完整 `<|im_start|>` 传进来
+     * （wrap 逻辑会原样透传）。
      */
     private fun wrapChatTemplate(prompt: String): String =
         if (prompt.contains("<|im_start|>")) prompt
-        else "<|im_start|>$prompt<|im_end|>\n<|im_start|>assistant\n"
+        else "<|im_start|>user\n$prompt<|im_end|>\n" +
+             "<|im_start|>assistant\n<think>\n\n</think>\n\n"
 
     /** 中断正在执行的生成 */
     fun stop() { if (handle != 0L) native.nativeStop(handle) }

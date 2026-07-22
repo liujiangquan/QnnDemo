@@ -27,7 +27,7 @@ class SettingsFragment : Fragment() {
             val v = p / 100f; settings.topP = v; "%.2f".format(v)
         }
         setupSlider(view, R.id.slider_max, R.id.value_max,
-            settings.maxTokens, 1024) { p ->
+            settings.maxTokens, 1800) { p ->
             settings.maxTokens = p; "$p"
         }
     }

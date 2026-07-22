@@ -12,7 +12,7 @@ class SamplingSettings(context: Context) {
         get() = prefs.getFloat("topP", 0.9f)
         set(v) { prefs.edit().putFloat("topP", v).apply() }
     var maxTokens: Int
-        get() = prefs.getInt("maxTokens", 256)
+        get() = prefs.getInt("maxTokens", 512)
         set(v) { prefs.edit().putInt("maxTokens", v).apply() }
 
     fun toSamplingParams() = SamplingParams(temperature, topP, 40, maxTokens)

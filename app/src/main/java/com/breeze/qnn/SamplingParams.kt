@@ -4,7 +4,7 @@ data class SamplingParams(
     val temperature: Float = 0.7f,
     val topP: Float = 0.9f,
     val topK: Int = 40,
-    val maxTokens: Int = 256,
+    val maxTokens: Int = 512,
     val seed: Long = 42L,
 )
 
