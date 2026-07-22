@@ -31,6 +31,8 @@ add_definitions(-DQAIRT_EASY_API)
 add_library(qnndemo SHARED
     qnn_jni.cpp
     qairt_runtime.cpp
+    llm_runtime.cpp
+    llm_jni.cpp
 )
 
 target_include_directories(qnndemo PRIVATE
