@@ -20,6 +20,8 @@ filter_test="${1:-}"
 # llm* 前缀走 LlmE2ETest（LLM Genie chat 场景），其它走 BackendE2ETest（CNN 场景）
 if [[ "$filter_test" == llm* ]]; then
     CLASS="com.breeze.qnn.LlmE2ETest"
+    # "llm" 单独作 alias：跑 LlmE2ETest 全部方法
+    if [ "$filter_test" = "llm" ]; then filter_test=""; fi
 fi
 test_arg=""
 if [ -n "$filter_test" ]; then
