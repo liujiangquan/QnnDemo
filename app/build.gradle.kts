@@ -80,6 +80,38 @@ android {
     }
 }
 
+// ============================================================
+// androidTest APK 统签
+//
+// 统签插件只 hook packageDebug/packageRelease，不覆盖 packageDebugAndroidTest。
+// instrumentation 要求 test APK 与 target APK 签名一致。
+// 这里在 packageDebugAndroidTest 后调用统签插件内部的 runner 完成重签。
+// ============================================================
+afterEvaluate {
+    tasks.named("packageDebugAndroidTest").configure {
+        doLast {
+            try {
+                val runnerClass = Class.forName(
+                    "com.stepos.unifiedsigning.gradle.UnifiedApksigInProcessRunner"
+                )
+                val instance = runnerClass.getField("INSTANCE").get(null)
+                val method = runnerClass.getMethod(
+                    "runPackagedVariantIfApplicable",
+                    org.gradle.api.Project::class.java,
+                    org.gradle.api.logging.Logger::class.java,
+                    String::class.java
+                )
+                // 统签插件按 variant 名寻找 outputs/apk/<subdir>/ 下的 APK。
+                // androidTest 的子目录是 "androidTest/debug"
+                method.invoke(instance, project, logger, "androidTest/debug")
+            } catch (e: Exception) {
+                logger.warn("unifiedSigning: [androidTest] re-sign failed: ${e.message}")
+                logger.warn("unifiedSigning: [androidTest] 如果需要跑 connectedDebugAndroidTest，请手动用 apksigner 重签 test APK")
+            }
+        }
+    }
+}
+
 dependencies {
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.core.ktx)
