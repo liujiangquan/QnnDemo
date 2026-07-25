@@ -39,7 +39,8 @@ QnnDemo/
 │   ├── convert_model.ps1                  # ONNX → DLC 转换脚本
 │   ├── get_logcat.bat                     # logcat 抓取脚本
 │   ├── DLC转换指南.md                      # DLC 模型获取与转换详细指南
-│   └── QNN模型产物转换指南.md               # DLC / SO / BIN 三种产物转换指南
+│   ├── QNN模型产物转换指南.md               # DLC / SO / BIN 三种产物转换指南（CNN）
+│   └── LLM转QNN指南.md                     # LLM（如 Qwen2.5-3B）转 QNN Genie 格式指南
 └── README.md
 ```
 
