@@ -50,10 +50,23 @@
 
 ## 4. 架构
 
-**关键洞察：零新增 native 代码。**
-现有 `QairtRuntime::execute(graphName, vector<vector<uint8_t>>)` 已支持多输入，
-`TensorInfo` 已带 `dataType`。BERT NER 就是另一个 DLC（3 输入 / 1 输出），
-直接复用 `InferenceEngine`。
+**修正（写 plan 阶段核实后发现）：需要少量新增 native 代码。**
+
+原设计声称"零新增 native"，实际核实发现 `qnn_jni.cpp` 的 `nativeExecute` 只把输出
+**尺寸**序列化回 Kotlin（`oss << "{\"size\":" << r.outputs[i].size() << "}"`），
+`InferenceResult` 只有 `outputSizes: List<Long>`，拿不到实际数值。现有 CNN 通路只
+验证"跑通并产出 N 字节"，从不读真实输出。
+
+NER 必须拿到 `logits` 数值，所以需要新增**一个** JNI 方法把输出字节回传：
+
+```cpp
+// 新增：返回实际输出字节（QairtRuntime::execute 已把数据存在
+// InferenceResult.outputs 里，类型是 vector<vector<uint8_t>>，只是没序列化）
+jobjectArray Java_com_breeze_qnn_QnnNative_nativeExecuteWithOutput(
+    JNIEnv* env, jobject, jlong handle, jstring graphName, jobjectArray inputs);
+```
+
+`QairtRuntime` 本身**不需要改动**。改动量约 40 行 C++ + 1 行 Kotlin external 声明。
 
 ```
 NerFragment (BottomNav 第 4 tab)
@@ -66,15 +79,26 @@ NerBackend ──────────────────── 编排�
       ├─ BioDecoder          logits[128][9] → List<Entity>
       └─ EntityMerger        NER ∪ 正则，重叠时正则优先
       │
-      ▼ 复用现有 QNN Direct API 通路
+      ▼ 复用现有 QNN Direct API 通路 + 新增取输出的 JNI
 InferenceEngine.loadDlc(path, Backend.HTP)
-InferenceEngine.execute("bert_ner", [idsBytes, maskBytes, typeIdsBytes])
+InferenceEngine.executeWithOutput("bert_ner", [idsBytes, maskBytes, typeIdsBytes])
       │
       ▼
 bert-ner-int8.dlc  on  Hexagon V81 HTP
 ```
 
 ## 5. 离线转换管线
+
+**前置：Python 环境**。QAIRT SDK 2.48 的 `qairt-converter` / `qairt-quantizer` 都是
+`#!/usr/bin/env python3` 脚本，**没有原生 exe 替代**；`check-python-dependency` 声明
+仅支持 **Python 3.10 / 3.12**。当前机器只有 Python 3.14 且无 pip，必须先装 3.10 或 3.12
+并跑 `bin/check-python-dependency` 安装 SDK 依赖。
+
+（`snpe-dlc-quant.exe` 与 `qnn-net-run.exe` 是原生 exe，不依赖 Python。）
+
+**Golden 来源**：不用 onnxruntime（Python 环境已是瓶颈，再引 onnxruntime 增加风险），
+改用 **fp32 DLC 作为 golden**。要验证的是"量化损失"和"HTP vs CPU 一致性"，两者都是
+DLC 层面的问题；ONNX→fp32-DLC 的转换正确性由 Qualcomm converter 保证。
 
 ```
 onnx/model.onnx (fp32, 动态 shape)
@@ -85,27 +109,27 @@ onnx/model.onnx (fp32, 动态 shape)
   │    --source_model_input_shape "attention_mask:1,128"
   │    --source_model_input_shape "token_type_ids:1,128"
   ▼
-bert-ner-fp32.dlc
-  │
-  │  qairt-quantizer
-  │    --input_list calibration_list.txt
-  │    --act_bitwidth 8
-  │    --bias_bitwidth 32
-  ▼
-bert-ner-int8.dlc  (~110MB)
-  │
-  ├─ PC 验证：qnn-net-run（x86 CPU backend）输出 vs Python golden，比 logits 余弦相似度
-  └─ 设备验证：HTP backend 输出 vs 同一份 golden
+bert-ner-fp32.dlc ──► qnn-net-run.exe (x86 CPU backend) ──► golden logits (raw fp32)
+  │                                                              │
+  │  qairt-quantizer --input_list calib.txt --act_bitwidth 8      │
+  ▼                                                              │ 余弦相似度 ≥ 0.99
+bert-ner-int8.dlc ──► qnn-net-run.exe (x86 CPU backend) ──► int8 logits ──┤
+       └────────────► 设备 HTP backend ────────────────────► htp logits ──┘
 ```
 
-**Calibration 数据**：50-100 条覆盖人名/地名/公司名/时间的中文句子，
-经 tokenizer 处理后存为 raw int32 文件供 quantizer 采样。由 `tools/gen_calibration.py` 生成。
+**Calibration 数据由 Kotlin 侧 tokenizer 生成**（而非 Python）：
+`WordPieceTokenizer` 是运行时要用的同一份实现，用它生成 calibration 输入可以
+**彻底消除"标定用的 tokenizer 跟运行时不一致"这类 bug**。通过一个 JVM 单测
+（`GenerateCalibrationDataTest`）把 50 条句子 tokenize 后写成 raw int32 文件。
+
+这带来实施顺序的微调：**`WordPieceTokenizer` 及其单测必须先于转换步骤完成**。
+方案 A"转换优先"的核心意图（HTP INT8 精度风险在写 UI 之前暴露）不变。
 
 **量化敏感点（转换阶段需重点验证）**：
 - `LayerNorm` / `Softmax` / `GELU` 在 INT8 下精度损失大，必要时保 fp16 混合精度
 - Embedding table 21128 × 768 = 16M 参数，8MB VTCM 装不下，走 DDR
 - `attention_mask` 是 0/1 语义，量化后必须保持语义正确
-- ONNX 原始输入可能是 int64（QNN 不支持），需确认 converter 降级到 int32
+- ONNX 原始输入是 int64（HuggingFace 导出惯例，QNN 不支持），需确认 converter 降级到 int32
 
 **精度验收门槛**：HTP INT8 输出与 fp32 golden 的 logits 余弦相似度 ≥ 0.99，
 且在测试句集上解出的实体集合完全一致。达不到则退到 fp16 或混合精度。
@@ -282,14 +306,18 @@ BottomNav 加第 4 个 tab「NER」。
 
 ```
 tools/
-  convert_bert_ner.sh          onnx → fp32 dlc → int8 dlc
-  gen_calibration.py           造 calibration raw 输入
-  ner_golden.py                onnxruntime 生成 golden logits json
+  convert_bert_ner.sh         onnx → fp32 dlc → int8 dlc（调 SDK 的 qairt-converter/quantizer）
+  compare_logits.py           读两份 raw fp32，算余弦相似度（纯 stdlib，无需 numpy）
 docs/
-  setup_bert_ner.sh            push dlc 到设备 filesDir
-  NER-使用指南.md              使用/验证文档
+  setup_bert_ner.sh           push int8 dlc 到设备 filesDir
+  NER-使用指南.md             使用/验证文档
+app/src/main/cpp/
+  qnn_jni.cpp                 （修改：加 nativeExecuteWithOutput，约 40 行）
 app/src/main/assets/
-  ner_vocab.txt                21128 行词表（109KB，打进 APK）
+  ner_vocab.txt               21128 行词表（109KB，打进 APK）
+app/src/main/java/com/breeze/qnn/
+  QnnNative.kt                （修改：加 nativeExecuteWithOutput external 声明）
+  InferenceEngine.kt          （修改：加 executeWithOutput suspend 方法）
 app/src/main/java/com/breeze/qnn/ner/
   Entity.kt
   SentenceSplitter.kt
@@ -306,7 +334,9 @@ app/src/main/res/layout/
   fragment_ner.xml
   item_entity.xml
 app/src/main/res/menu/
-  bottom_nav.xml               （修改：加 nav_ner）
+  bottom_nav.xml              （修改：加 nav_ner item）
+app/src/main/java/com/breeze/qnn/
+  MainActivity.kt             （修改：switchTo 加 nav_ner 分支）
 app/src/test/java/com/breeze/qnn/ner/
   SentenceSplitterTest.kt
   WordPieceTokenizerTest.kt
@@ -314,8 +344,10 @@ app/src/test/java/com/breeze/qnn/ner/
   RegexDetectorTest.kt
   EntityMergerTest.kt
   NerGoldenTest.kt
+  GenerateCalibrationDataTest.kt   用运行时 tokenizer 生成 calibration raw 文件
 app/src/test/resources/
-  ner_golden.json              PC 侧生成的 golden fixture
+  ner_vocab.txt               单测用词表副本（JVM 单测读不到 assets）
+  ner_golden.json             golden fixture（logits + 期望实体）
 app/src/androidTest/java/com/breeze/qnn/
   NerE2ETest.kt
 ```
