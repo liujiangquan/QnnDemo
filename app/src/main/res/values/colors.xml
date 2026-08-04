@@ -7,4 +7,8 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <!-- BottomNav：未选中项用深灰，避免与白色背景撞色 -->
+    <color name="nav_item_selected">#FF6200EE</color>
+    <color name="nav_item_unselected">#FF616161</color>
+    <color name="nav_bar_background">#FFF5F5F5</color>
 </resources>
