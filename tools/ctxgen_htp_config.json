@@ -1,0 +1,6 @@
+{
+  "backend_extensions": {
+    "shared_library_path": "/data/local/tmp/nerbench/lib/libQnnHtpNetRunExtensions.so",
+    "config_file_path": "/data/local/tmp/nerbench/htp_ctx_fp16_config.json"
+  }
+}

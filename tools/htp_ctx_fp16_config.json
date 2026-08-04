@@ -1,0 +1,21 @@
+{
+  "graphs": [
+    {
+      "graph_names": ["bert-ner-fp32"],
+      "fp16_relaxed_precision": 1,
+      "vtcm_mb": 8,
+      "O": 3
+    }
+  ],
+  "devices": [
+    {
+      "device_id": 0,
+      "core_type": 0,
+      "core_id": [0],
+      "dsp_arch": "v81",
+      "soc_id": 97,
+      "soc_model": 97,
+      "cores": [ { "perf_profile": "burst" } ]
+    }
+  ]
+}
