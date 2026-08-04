@@ -97,6 +97,19 @@ class InferenceEngine(private val context: Context) : AutoCloseable {
             InferenceResult.fromJson(json)
         }
 
+    /**
+     * 执行推理并取回实际输出字节。[execute] 只返回尺寸，读不到数值。
+     * @return 每个输出张量的字节数组；未加载模型或 native 报错时返回 null
+     */
+    suspend fun executeWithOutput(graphName: String, inputs: List<ByteArray>): List<ByteArray>? =
+        withContext(Dispatchers.IO) {
+            if (!loaded) {
+                Log.e(TAG, "executeWithOutput: 运行时未加载模型")
+                return@withContext null
+            }
+            native.nativeExecuteWithOutput(handle, graphName, inputs.toTypedArray())?.toList()
+        }
+
     /** 生成全零输入（用于功能性测试） */
     fun makeZeroInputs(graph: GraphInfo): List<ByteArray> {
         return graph.inputs.map { t ->

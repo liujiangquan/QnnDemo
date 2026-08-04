@@ -48,4 +48,16 @@ class QnnNative {
      * @return 结果 JSON：{graphName, elapsedMs, error, outputs:[{size}]}
      */
     external fun nativeExecute(handle: Long, graphName: String, inputs: Array<ByteArray>): String
+
+    /**
+     * 执行一次推理并取回**实际输出字节**（[nativeExecute] 只返回尺寸）。
+     *
+     * NER 之类需要读 logits 数值的场景用这个；CNN 只关心"跑通没有"用 [nativeExecute] 即可。
+     * @return 每个输出张量的扁平字节数组；失败返回 null
+     */
+    external fun nativeExecuteWithOutput(
+        handle: Long,
+        graphName: String,
+        inputs: Array<ByteArray>,
+    ): Array<ByteArray>?
 }

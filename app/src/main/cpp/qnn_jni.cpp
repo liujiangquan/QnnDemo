@@ -228,4 +228,60 @@ Java_com_breeze_qnn_QnnNative_nativeExecute(JNIEnv* env, jobject, jlong handle,
     return env->NewStringUTF(serializeResult(r).c_str());
 }
 
+// 返回实际输出字节，而不是像 nativeExecute 那样只返回尺寸。
+// NER 之类需要读 logits 数值的场景用这个；CNN 只关心"跑通没有"，用 nativeExecute 即可。
+// 失败（handle 非法 / runtime 报错）时返回 null，由 Kotlin 侧判空。
+JNIEXPORT jobjectArray JNICALL
+Java_com_breeze_qnn_QnnNative_nativeExecuteWithOutput(JNIEnv* env, jobject, jlong handle,
+                                                       jstring graphName, jobjectArray inputs) {
+    auto* rt = getRuntime(handle);
+    if (!rt) {
+        LOGE("nativeExecuteWithOutput: invalid handle");
+        return nullptr;
+    }
+
+    const char* gn = graphName ? env->GetStringUTFChars(graphName, nullptr) : nullptr;
+    std::string graphStr = gn ? gn : "";
+    if (gn) env->ReleaseStringUTFChars(graphName, gn);
+
+    std::vector<std::vector<uint8_t>> inVecs;
+    if (inputs) {
+        jsize n = env->GetArrayLength(inputs);
+        inVecs.reserve(n);
+        for (jsize i = 0; i < n; ++i) {
+            jbyteArray arr = static_cast<jbyteArray>(env->GetObjectArrayElement(inputs, i));
+            if (!arr) { inVecs.emplace_back(); continue; }
+            jsize len = env->GetArrayLength(arr);
+            jbyte* buf = env->GetByteArrayElements(arr, nullptr);
+            std::vector<uint8_t> v(buf, buf + len);
+            env->ReleaseByteArrayElements(arr, buf, JNI_ABORT);
+            env->DeleteLocalRef(arr);
+            inVecs.push_back(std::move(v));
+        }
+    }
+
+    InferenceResult r = rt->execute(graphStr, inVecs);
+    if (!r.error.empty()) {
+        LOGE("nativeExecuteWithOutput 失败: %s", r.error.c_str());
+        return nullptr;
+    }
+
+    jclass byteArrayCls = env->FindClass("[B");
+    if (!byteArrayCls) return nullptr;
+    jobjectArray out = env->NewObjectArray(static_cast<jsize>(r.outputs.size()), byteArrayCls, nullptr);
+    if (!out) return nullptr;
+
+    for (size_t i = 0; i < r.outputs.size(); ++i) {
+        const auto& buf = r.outputs[i];
+        jbyteArray arr = env->NewByteArray(static_cast<jsize>(buf.size()));
+        if (!arr) return nullptr;
+        env->SetByteArrayRegion(arr, 0, static_cast<jsize>(buf.size()),
+                                reinterpret_cast<const jbyte*>(buf.data()));
+        env->SetObjectArrayElement(out, static_cast<jsize>(i), arr);
+        // 及时释放局部引用，输出张量多时避免超出 local ref 表上限
+        env->DeleteLocalRef(arr);
+    }
+    return out;
+}
+
 }  // extern "C"

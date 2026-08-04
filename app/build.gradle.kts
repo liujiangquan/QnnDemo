@@ -132,6 +132,9 @@ dependencies {
     implementation("androidx.recyclerview:recyclerview:1.3.2")
 
     testImplementation(libs.junit)
+    // Android 自带的 org.json 在 JVM 单测里只有抛异常的 stub（"not mocked"），
+    // 引真实现让 NerGoldenTest 能解析 golden fixture
+    testImplementation("org.json:json:20240303")
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
 }
