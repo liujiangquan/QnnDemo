@@ -8,6 +8,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.fragment.app.Fragment
 import com.breeze.qnn.ui.BackendFragment
 import com.breeze.qnn.ui.ChatFragment
+import com.breeze.qnn.ui.NerFragment
 import com.breeze.qnn.ui.SettingsFragment
 import com.google.android.material.bottomnavigation.BottomNavigationView
 
@@ -34,6 +35,7 @@ class MainActivity : AppCompatActivity() {
                 when (item.itemId) {
                     R.id.nav_backend  -> switchTo(BackendFragment())
                     R.id.nav_chat     -> switchTo(ChatFragment())
+                    R.id.nav_ner      -> switchTo(NerFragment())
                     R.id.nav_settings -> switchTo(SettingsFragment())
                     else -> return@setOnItemSelectedListener false
                 }
