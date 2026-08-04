@@ -34,6 +34,10 @@ class NerBackend(private val context: Context) : AutoCloseable {
     private var inputNames: List<String> = emptyList()
     private var ready = false
 
+    /** 本次实际加载的是哪种产物，给 UI 显示用。 */
+    var modelKind: String = ""
+        private set
+
     /** 加载 vocab 并初始化 native 运行时。 */
     fun init(): Boolean {
         tokenizer = try {
@@ -73,6 +77,7 @@ class NerBackend(private val context: Context) : AutoCloseable {
             ctx.exists() && ctx.length() > 100_000_000L
         val ok = if (useCtx) {
             Log.i(TAG, "用 context binary: ${ctx.name}")
+            modelKind = "fp16 ctx"
             engine.loadContextBinary(ctx.absolutePath, backend)
         } else {
             val f = dlcFile()
@@ -81,6 +86,7 @@ class NerBackend(private val context: Context) : AutoCloseable {
                 return false
             }
             Log.i(TAG, "用 DLC: ${f.name} (backend=$backend)")
+            modelKind = "fp32 dlc"
             engine.loadDlc(f.absolutePath, backend)
         }
         if (!ok) return false
@@ -92,7 +98,9 @@ class NerBackend(private val context: Context) : AutoCloseable {
         inputNames = g.inputs.map { it.name }
         Log.i(TAG, "输入张量顺序 = $inputNames")
         ready = true
-        Log.i(TAG, "模型已加载, graph=$graphName backend=$backend")
+        // 图名沿用源 DLC（ctx-gen 的输入是 bert-ner-fp32.dlc），跟实际权重精度无关，
+        // 所以这里把 modelKind 一起打出来，免得看日志的人以为还在跑 fp32。
+        Log.i(TAG, "模型已加载, graph=$graphName ($modelKind) backend=$backend")
         warmup()
         return true
     }

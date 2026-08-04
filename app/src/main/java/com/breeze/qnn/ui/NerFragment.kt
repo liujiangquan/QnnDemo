@@ -26,7 +26,7 @@ import com.breeze.qnn.ner.Entity
  * 中文敏感信息识别（BERT NER on 8845 HTP）。
  *
  * 输入文本 → 高亮标记 PER/LOC/ORG/TIME 与正则命中的手机号/身份证/银行卡/邮箱/车牌，
- * 下方列出实体明细。后端可切 HTP / CPU 对比（实测 HTP fp32 ~34ms、CPU ~101ms，精度都达标）。
+ * 下方列出实体明细。后端可切 HTP / CPU 对比（实测 HTP ~17ms、CPU ~101ms，精度都达标）。
  */
 class NerFragment : Fragment() {
 
@@ -71,7 +71,7 @@ class NerFragment : Fragment() {
         viewModel.state.observe(viewLifecycleOwner) { st ->
             when (st) {
                 NerViewModel.State.INIT -> showBanner("初始化中…")
-                NerViewModel.State.LOADING -> showBanner("加载 DLC 中（首次编译图约 3-5s）…")
+                NerViewModel.State.LOADING -> showBanner("加载模型中（HTP 走预编译 ctx 约 0.4s；CPU 要现场编图 3-5s）…")
                 NerViewModel.State.MODEL_MISSING -> showBanner(
                     "模型未预置。请跑：\nbash docs/setup_bert_ner.sh"
                 )
@@ -96,7 +96,7 @@ class NerFragment : Fragment() {
             tvStats.text = buildString {
                 append("耗时 ${r.elapsedMs}ms · ${r.sentenceCount} 句 · ${r.entities.size} 个实体")
                 if (r.failedSentences > 0) append(" · ${r.failedSentences} 句失败")
-                append(" · 后端 ${viewModel.backendChoice}")
+                append(" · 后端 ${viewModel.backendChoice} ${viewModel.modelKind}")
             }
         }
 

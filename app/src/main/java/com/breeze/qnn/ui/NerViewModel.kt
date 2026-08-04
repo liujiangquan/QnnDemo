@@ -20,7 +20,7 @@ class NerViewModel(app: Application) : AndroidViewModel(app) {
     val result = MutableLiveData<NerResult?>()
     val progress = MutableLiveData<Pair<Int, Int>?>()
 
-    /** 当前选中的后端。HTP 是默认——实测 fp32 在 HTP 上 ~34ms 且精度达标。 */
+    /** 当前选中的后端。HTP 是默认——实测单句 ~17ms，CPU ~101ms，精度都达标。 */
     var backendChoice: QnnNative.Backend = QnnNative.Backend.HTP
         private set
 
@@ -47,10 +47,13 @@ class NerViewModel(app: Application) : AndroidViewModel(app) {
     fun selectBackend(b: QnnNative.Backend) {
         if (b == backendChoice) return
         backendChoice = b
-        // 切后端必须重新 loadDlc
+        // 切后端必须重新加载模型（HTP 走 context binary，CPU 只能走 DLC）
         loadedBackend = null
         if (backend.modelReady()) viewModelScope.launch { loadModel() }
     }
+
+    /** 实际加载的产物（"fp16 ctx" / "fp32 dlc"），给状态栏显示。 */
+    val modelKind: String get() = backend.modelKind
 
     private suspend fun loadModel() {
         if (loadedBackend == backendChoice) return
@@ -60,7 +63,7 @@ class NerViewModel(app: Application) : AndroidViewModel(app) {
             loadedBackend = backendChoice
             state.value = State.READY
         } else {
-            error.value = "DLC 加载失败（backend=$backendChoice）"
+            error.value = "模型加载失败（backend=$backendChoice）"
             state.value = State.ERROR
         }
     }
