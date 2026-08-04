@@ -228,6 +228,18 @@ Java_com_breeze_qnn_QnnNative_nativeExecute(JNIEnv* env, jobject, jlong handle,
     return env->NewStringUTF(serializeResult(r).c_str());
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_breeze_qnn_QnnNative_nativeLoadContextBinary(JNIEnv* env, jobject, jlong handle,
+                                                       jstring binPath, jint backend) {
+    auto* rt = getRuntime(handle);
+    if (!rt) return JNI_FALSE;
+    const char* p = binPath ? env->GetStringUTFChars(binPath, nullptr) : nullptr;
+    std::string path = p ? p : "";
+    if (p) env->ReleaseStringUTFChars(binPath, p);
+    bool ok = rt->loadContextBinary(path, toBackendType(backend));
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
 // 返回实际输出字节，而不是像 nativeExecute 那样只返回尺寸。
 // NER 之类需要读 logits 数值的场景用这个；CNN 只关心"跑通没有"，用 nativeExecute 即可。
 // 失败（handle 非法 / runtime 报错）时返回 null，由 Kotlin 侧判空。

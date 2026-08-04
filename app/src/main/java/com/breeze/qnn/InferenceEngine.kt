@@ -87,6 +87,27 @@ class InferenceEngine(private val context: Context) : AutoCloseable {
             return@withContext loaded
         }
 
+    /**
+     * 加载预编译 context binary。相比 [loadDlc]：图已 finalize，不用现场编译。
+     * NER 模型实测加载 5344ms→371ms、体积 388MB→205MB，单句推理耗时基本不变。
+     * 代价：与 SoC 绑死（graph-prepare 时烘进去的），换机型要重新生成。
+     */
+    suspend fun loadContextBinary(binPath: String, backend: QnnNative.Backend): Boolean =
+        withContext(Dispatchers.IO) {
+            if (!initialized) {
+                Log.e(TAG, "请先调用 init()")
+                return@withContext false
+            }
+            loaded = native.nativeLoadContextBinary(handle, binPath, backend.value)
+            if (loaded) {
+                graphInfos = GraphInfo.listFromJson(native.nativeGetGraphInfoJson(handle))
+                Log.i(TAG, "context binary 加载成功, 图数量=${graphInfos.size}, backend=$backend")
+            } else {
+                Log.e(TAG, "context binary 加载失败: $binPath")
+            }
+            return@withContext loaded
+        }
+
     /** 执行推理 */
     suspend fun execute(graphName: String, inputs: List<ByteArray>): InferenceResult =
         withContext(Dispatchers.IO) {

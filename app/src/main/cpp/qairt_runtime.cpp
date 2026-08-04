@@ -23,6 +23,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <sstream>
 
@@ -95,8 +96,7 @@ static inline Qnn_TensorV2_t* asV2Mut(Qnn_Tensor_t& t) {
 }
 
 // 从 Qnn_Tensor_t 抽出通用信息填充到 TensorInfo
-static TensorInfo makeTensorInfo(const Qnn_Tensor_t& t) {
-    TensorInfo ti;
+static TensorInfo makeTensorInfo(const Qnn_Tensor_t& t) {    TensorInfo ti;
     const char* name = nullptr;
     uint32_t rank = 0;
     const uint32_t* dims = nullptr;
@@ -121,6 +121,40 @@ static TensorInfo makeTensorInfo(const Qnn_Tensor_t& t) {
     }
     ti.totalBytes = ti.totalElements * ti.elementBytes;
     return ti;
+}
+
+// 把 tensor 里的 name / dimensions / isDynamicDimensions 从外部内存深拷到调用方
+// 拥有的存储里，并把指针改指到副本。context binary 路径必须做这一步：那些指针
+// 指向 systemContext 的内部内存，systemContextFree 之后就是野指针。
+// 存储用 deque 而不是 vector —— vector 扩容会搬家，已经改好的指针会失效。
+static void ownTensorMeta(std::vector<Qnn_Tensor_t>& tensors,
+                          std::deque<std::string>& names,
+                          std::deque<std::vector<uint32_t>>& dims,
+                          std::deque<std::vector<uint8_t>>& dynFlags) {
+    for (auto& t : tensors) {
+        const char** namePtr = nullptr;
+        uint32_t** dimPtr = nullptr;
+        uint8_t** dynPtr = nullptr;
+        uint32_t rank = 0;
+        if (auto* v = asV1Mut(t)) {
+            namePtr = &v->name; dimPtr = &v->dimensions; rank = v->rank;
+        } else if (auto* v = asV2Mut(t)) {
+            namePtr = &v->name; dimPtr = &v->dimensions; rank = v->rank;
+            dynPtr = &v->isDynamicDimensions;
+        } else {
+            continue;
+        }
+        names.emplace_back(*namePtr ? *namePtr : "");
+        *namePtr = names.back().c_str();
+        if (rank > 0 && *dimPtr) {
+            dims.emplace_back(*dimPtr, *dimPtr + rank);
+            *dimPtr = dims.back().data();
+        }
+        if (rank > 0 && dynPtr && *dynPtr) {
+            dynFlags.emplace_back(*dynPtr, *dynPtr + rank);
+            *dynPtr = dynFlags.back().data();
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +189,12 @@ struct QairtRuntime::Impl {
         Qnn_GraphHandle_t handle = nullptr;
         std::vector<Qnn_Tensor_t> inputs;
         std::vector<Qnn_Tensor_t> outputs;
+        // Qnn_Tensor_t 里的 name/dimensions 是裸指针。context binary 路径上它们指向
+        // systemContext 拥有的内存，systemContextFree 后就是野指针（读出的 rank/dims
+        // 是垃圾，execute 分配输出 buffer 时 std::bad_alloc）。所以深拷到这里并改指。
+        std::deque<std::string> ownedNames;
+        std::deque<std::vector<uint32_t>> ownedDims;
+        std::deque<std::vector<uint8_t>> ownedDynFlags;
     };
     std::vector<GraphSlot> graphSlots;
 
@@ -294,7 +334,7 @@ bool QairtRuntime::init(const std::string& libSearchPath) {
 // ---------------------------------------------------------------------------
 // loadDlc：dlopen 后端 → 建 Log/Backend/Device/Context → DLC compose
 // ---------------------------------------------------------------------------
-bool QairtRuntime::loadDlc(const std::string& dlcPath, BackendType backend) {
+bool QairtRuntime::prepareBackend(BackendType backend) {
     if (!ready_ || !impl_->sysIface) {
         LOGE("Runtime 未初始化，请先调用 init()");
         return false;
@@ -430,6 +470,14 @@ bool QairtRuntime::loadDlc(const std::string& dlcPath, BackendType backend) {
         }
     }
 
+    return true;
+}
+
+bool QairtRuntime::loadDlc(const std::string& dlcPath, BackendType backend) {
+    if (!prepareBackend(backend)) return false;
+    const auto& iface = impl_->qnnIface->QNN_INTERFACE_VER_NAME;
+    Qnn_ErrorHandle_t s = QNN_SUCCESS;
+
     // 5) Context
     s = iface.contextCreate(impl_->backendHandle,
                             impl_->deviceHandle,
@@ -537,6 +585,187 @@ bool QairtRuntime::loadDlc(const std::string& dlcPath, BackendType backend) {
     LOGI("图信息就绪: %zu 个", graphs_.size());
     return true;
 }
+
+// ---------------------------------------------------------------------------
+// loadContextBinary：加载 qnn-context-binary-generator 预编译好的 context。
+//
+// 与 loadDlc 的差别：图已经在生成时 finalize 过，运行时只需 createFromBinary +
+// graphRetrieve，不用现场编译。实测 NER 模型：加载 6.6s→0.9s、单次推理
+// 52ms→8ms、体积 388MB→205MB（fp16 在生成阶段烘进去了）。
+// 代价：context binary 与 SoC 绑死，换机型必须重新生成。
+// ---------------------------------------------------------------------------
+bool QairtRuntime::loadContextBinary(const std::string& binPath, BackendType backend) {
+    if (!prepareBackend(backend)) return false;
+    const auto& iface = impl_->qnnIface->QNN_INTERFACE_VER_NAME;
+
+    // 1) 整个 .bin 读进内存（205MB 量级，一次性）
+    FILE* f = fopen(binPath.c_str(), "rb");
+    if (!f) {
+        LOGE("打不开 context binary: %s", binPath.c_str());
+        return false;
+    }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0) {
+        LOGE("context binary 为空: %s", binPath.c_str());
+        fclose(f);
+        return false;
+    }
+    std::vector<uint8_t> buf(static_cast<size_t>(sz));
+    size_t rd = fread(buf.data(), 1, buf.size(), f);
+    fclose(f);
+    if (rd != buf.size()) {
+        LOGE("context binary 读取不完整: %zu/%zu", rd, buf.size());
+        return false;
+    }
+    LOGI("context binary 已读入: %s (%ld bytes)", binPath.c_str(), sz);
+
+    // 2) 先用 systemContext 解出图元信息（名字 / 输入输出 tensor）
+    const auto& sys = impl_->sysIface->QNN_SYSTEM_INTERFACE_VER_NAME;
+    if (!sys.systemContextCreate || !sys.systemContextGetBinaryInfo) {
+        LOGE("libQnnSystem.so 缺 systemContextCreate/GetBinaryInfo");
+        return false;
+    }
+    QnnSystemContext_Handle_t sysCtx = nullptr;
+    if (sys.systemContextCreate(&sysCtx) != QNN_SUCCESS || !sysCtx) {
+        LOGE("systemContextCreate 失败");
+        return false;
+    }
+    const QnnSystemContext_BinaryInfo_t* binInfo = nullptr;
+    Qnn_ContextBinarySize_t binInfoSize = 0;
+    Qnn_ErrorHandle_t s = sys.systemContextGetBinaryInfo(
+        sysCtx, buf.data(), buf.size(), &binInfo, &binInfoSize);
+    if (s != QNN_SUCCESS || !binInfo) {
+        LOGE("systemContextGetBinaryInfo 失败: 0x%llx", (unsigned long long)s);
+        if (sys.systemContextFree) sys.systemContextFree(sysCtx);
+        return false;
+    }
+
+    // BinaryInfo 有 V1/V2/V3 三个版本，三者的 numGraphs/graphs 字段语义一致
+    uint32_t numGraphs = 0;
+    const QnnSystemContext_GraphInfo_t* gInfos = nullptr;
+    switch (binInfo->version) {
+        case QNN_SYSTEM_CONTEXT_BINARY_INFO_VERSION_1:
+            numGraphs = binInfo->contextBinaryInfoV1.numGraphs;
+            gInfos    = binInfo->contextBinaryInfoV1.graphs;
+            break;
+        case QNN_SYSTEM_CONTEXT_BINARY_INFO_VERSION_2:
+            numGraphs = binInfo->contextBinaryInfoV2.numGraphs;
+            gInfos    = binInfo->contextBinaryInfoV2.graphs;
+            break;
+        case QNN_SYSTEM_CONTEXT_BINARY_INFO_VERSION_3:
+            numGraphs = binInfo->contextBinaryInfoV3.numGraphs;
+            gInfos    = binInfo->contextBinaryInfoV3.graphs;
+            break;
+        default:
+            LOGE("未知 BinaryInfo 版本: %d", (int)binInfo->version);
+            if (sys.systemContextFree) sys.systemContextFree(sysCtx);
+            return false;
+    }
+    if (numGraphs == 0 || !gInfos) {
+        LOGE("context binary 里没有图");
+        if (sys.systemContextFree) sys.systemContextFree(sysCtx);
+        return false;
+    }
+    LOGI("BinaryInfo v%d: %u 个 graph", (int)binInfo->version, numGraphs);
+
+    // 3) 从 binary 建 context（这一步把预编译好的图直接装载到后端）
+    if (!iface.contextCreateFromBinary) {
+        LOGE("后端不支持 contextCreateFromBinary");
+        if (sys.systemContextFree) sys.systemContextFree(sysCtx);
+        return false;
+    }
+    s = iface.contextCreateFromBinary(impl_->backendHandle,
+                                      impl_->deviceHandle,
+                                      nullptr,
+                                      buf.data(), buf.size(),
+                                      &impl_->contextHandle,
+                                      nullptr);
+    if (s != QNN_SUCCESS || !impl_->contextHandle) {
+        LOGE("contextCreateFromBinary 失败: 0x%llx", (unsigned long long)s);
+        if (sys.systemContextFree) sys.systemContextFree(sysCtx);
+        return false;
+    }
+    LOGI("contextCreateFromBinary 成功");
+
+    // 4) 建 GraphSlot。注意：图已在生成阶段 finalize，这里**不能**再 finalize。
+    //    tensor 元数据指针指向 binInfo 内部内存，所以要在 systemContextFree 之前
+    //    把需要的东西（GraphInfo）深拷完。
+    graphs_.clear();
+    impl_->graphSlots.clear();
+    impl_->graphSlots.reserve(numGraphs);
+    for (uint32_t i = 0; i < numGraphs; ++i) {
+        const auto& info = gInfos[i];
+
+        // GraphInfo 有 V1/V2/V3。三者的 graphName / graphInputs / graphOutputs
+        // 字段语义一致（V2/V3 只是额外多了 updateableTensors 之类），统一取出来用。
+        // context binary 实测给的是 V3 —— 只认 V1 会导致"加载完成: 0 个图"。
+        const char* gName = nullptr;
+        uint32_t nIn = 0, nOut = 0;
+        const Qnn_Tensor_t* tIn = nullptr;
+        const Qnn_Tensor_t* tOut = nullptr;
+        switch (info.version) {
+            case QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_1:
+                gName = info.graphInfoV1.graphName;
+                nIn  = info.graphInfoV1.numGraphInputs;  tIn  = info.graphInfoV1.graphInputs;
+                nOut = info.graphInfoV1.numGraphOutputs; tOut = info.graphInfoV1.graphOutputs;
+                break;
+            case QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_2:
+                gName = info.graphInfoV2.graphName;
+                nIn  = info.graphInfoV2.numGraphInputs;  tIn  = info.graphInfoV2.graphInputs;
+                nOut = info.graphInfoV2.numGraphOutputs; tOut = info.graphInfoV2.graphOutputs;
+                break;
+            case QNN_SYSTEM_CONTEXT_GRAPH_INFO_VERSION_3:
+                gName = info.graphInfoV3.graphName;
+                nIn  = info.graphInfoV3.numGraphInputs;  tIn  = info.graphInfoV3.graphInputs;
+                nOut = info.graphInfoV3.numGraphOutputs; tOut = info.graphInfoV3.graphOutputs;
+                break;
+            default:
+                LOGW("graph[%u] 未知元信息版本 %d，跳过", i, (int)info.version);
+                continue;
+        }
+
+        Impl::GraphSlot slot;
+        slot.name = gName ? gName : "";
+        if (iface.graphRetrieve) {
+            Qnn_ErrorHandle_t rs =
+                iface.graphRetrieve(impl_->contextHandle, slot.name.c_str(), &slot.handle);
+            if (rs != QNN_SUCCESS || !slot.handle) {
+                LOGE("graphRetrieve(%s) 失败: 0x%llx",
+                     slot.name.c_str(), (unsigned long long)rs);
+                if (sys.systemContextFree) sys.systemContextFree(sysCtx);
+                return false;
+            }
+        }
+        slot.inputs.assign(tIn,  tIn  + nIn);
+        slot.outputs.assign(tOut, tOut + nOut);
+        ownTensorMeta(slot.inputs,  slot.ownedNames, slot.ownedDims, slot.ownedDynFlags);
+        ownTensorMeta(slot.outputs, slot.ownedNames, slot.ownedDims, slot.ownedDynFlags);
+
+        GraphInfo gi;
+        gi.name = slot.name;
+        gi.inputs.reserve(nIn);
+        for (uint32_t j = 0; j < nIn; ++j)
+            gi.inputs.push_back(makeTensorInfo(slot.inputs[j]));
+        gi.outputs.reserve(nOut);
+        for (uint32_t j = 0; j < nOut; ++j)
+            gi.outputs.push_back(makeTensorInfo(slot.outputs[j]));
+
+        impl_->graphSlots.push_back(std::move(slot));
+        graphs_.push_back(std::move(gi));
+    }
+
+    // slot.inputs/outputs 里的 Qnn_Tensor_t 仍指向 binInfo 内存，而 execute 只用
+    // 其中的 id/dataType/rank/dimensions（已随 assign 值拷贝）与 name 指针。
+    // name 指针在 systemContextFree 后失效，但 execute 走的是 graphSlots 里的
+    // Qnn_Tensor_t 副本 + 我们自己的 graphs_ 名字，因此这里可以安全释放。
+    if (sys.systemContextFree) sys.systemContextFree(sysCtx);
+
+    LOGI("context binary 加载完成: %zu 个图", graphs_.size());
+    return true;
+}
+
 
 // ---------------------------------------------------------------------------
 // execute：绑定输入/输出 buffer，调用 graphExecute

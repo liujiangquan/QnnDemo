@@ -37,6 +37,12 @@ class QnnNative {
     /** 加载 DLC 模型并构建运行时 */
     external fun nativeLoadDlc(handle: Long, dlcPath: String, backend: Int): Boolean
 
+    /**
+     * 加载预编译的 context binary（qnn-context-binary-generator 产物）。
+     * 图已 finalize，加载与推理都比 DLC 快得多，但与 SoC 绑死。
+     */
+    external fun nativeLoadContextBinary(handle: Long, binPath: String, backend: Int): Boolean
+
     /** 获取所有图与张量元信息的 JSON 字符串 */
     external fun nativeGetGraphInfoJson(handle: Long): String
 

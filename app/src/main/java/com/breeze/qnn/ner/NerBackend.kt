@@ -50,28 +50,49 @@ class NerBackend(private val context: Context) : AutoCloseable {
         return true
     }
 
-    /** DLC 是否已预置到设备。 */
-    fun modelReady(): Boolean = dlcFile().let { it.exists() && it.length() > 100_000_000L }
+    /** 模型是否已预置（context binary 或 DLC 任一）。 */
+    fun modelReady(): Boolean =
+        ctxFile().let { it.exists() && it.length() > 100_000_000L } ||
+        dlcFile().let { it.exists() && it.length() > 100_000_000L }
 
+    private fun ctxFile() = File(context.filesDir, "ner/$CTX_NAME")
     private fun dlcFile() = File(context.filesDir, "ner/$DLC_NAME")
 
-    /** 加载 DLC。backend 默认 HTP。 */
+    /**
+     * 加载模型，backend 默认 HTP。
+     *
+     * HTP 上**优先用预编译 context binary**（205MB / 加载 371ms），
+     * 没有才回退 DLC（388MB / 加载 5344ms）。两者精度相同（余弦 0.99697），
+     * 单句耗时也基本一样（~17ms），收益是体积对半 + 加载快 14x。
+     * context binary 是 HTP graph-prepare 的产物，CPU 后端加载不了，也与 SoC 绑死，
+     * 所以 DLC 保留作 CPU / 换机型的兜底。
+     */
     suspend fun loadModel(backend: QnnNative.Backend = QnnNative.Backend.HTP): Boolean {
-        val f = dlcFile()
-        if (!f.exists()) {
-            Log.e(TAG, "DLC 不存在: ${f.absolutePath}")
-            return false
+        val ctx = ctxFile()
+        val useCtx = backend == QnnNative.Backend.HTP &&
+            ctx.exists() && ctx.length() > 100_000_000L
+        val ok = if (useCtx) {
+            Log.i(TAG, "用 context binary: ${ctx.name}")
+            engine.loadContextBinary(ctx.absolutePath, backend)
+        } else {
+            val f = dlcFile()
+            if (!f.exists()) {
+                Log.e(TAG, "模型不存在: ${ctx.absolutePath} / ${f.absolutePath}")
+                return false
+            }
+            Log.i(TAG, "用 DLC: ${f.name} (backend=$backend)")
+            engine.loadDlc(f.absolutePath, backend)
         }
-        if (!engine.loadDlc(f.absolutePath, backend)) return false
+        if (!ok) return false
         val g = engine.graphInfos.firstOrNull() ?: run {
-            Log.e(TAG, "DLC 里没有图")
+            Log.e(TAG, "模型里没有图")
             return false
         }
         graphName = g.name
         inputNames = g.inputs.map { it.name }
         Log.i(TAG, "输入张量顺序 = $inputNames")
         ready = true
-        Log.i(TAG, "DLC 已加载, graph=$graphName backend=$backend")
+        Log.i(TAG, "模型已加载, graph=$graphName backend=$backend")
         warmup()
         return true
     }
@@ -147,6 +168,8 @@ class NerBackend(private val context: Context) : AutoCloseable {
         private const val TAG = "NerBackend"
         const val VOCAB_ASSET = "ner_vocab.txt"
         const val DLC_NAME = "bert-ner-fp32.dlc"
+        /** 预编译 context binary（fp16 已烘入），优先用它 */
+        const val CTX_NAME = "bert-ner-fp16.bin"
         /** 防 UI 卡死的上限 */
         const val MAX_SENTENCES = 50
         /** 预热用的短句，内容无所谓，只为触发一次 execute */

@@ -39,3 +39,6 @@ local.properties
 /vendor_pull/
 *.dlc.bak
 *.sdk248.bak
+
+# Python caches
+__pycache__/
