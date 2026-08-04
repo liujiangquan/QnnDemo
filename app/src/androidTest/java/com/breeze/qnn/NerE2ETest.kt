@@ -74,8 +74,7 @@ class NerE2ETest {
     @Test fun nerLatencyPerSentence(): Unit = runBlocking {
         withTimeout(120_000L) {
             assertTrue(backend.loadModel(QnnNative.Backend.HTP))
-            // 预热一次，排除首次 execute 的额外开销
-            backend.recognize("预热句子。")
+            // loadModel 内部已预热（HTP 首次 execute 输出不可靠），这里直接测
             val r = backend.recognize("南开大学位于天津市南开区。钱七于2022年8月前往苏州。")
             assertTrue("应切成 2 句，实际 ${r.sentenceCount}", r.sentenceCount == 2)
             val perSentence = r.elapsedMs / r.sentenceCount

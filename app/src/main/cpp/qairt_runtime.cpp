@@ -237,12 +237,15 @@ static void* openLib(const char* name, const std::string& searchPath) {
 bool QairtRuntime::init(const std::string& libSearchPath) {
     if (ready_) return true;
 
-    // 关键：所有 HTP 后端启动前必须先设 ADSP_LIBRARY_PATH，否则 FastRPC
-    // 找不到 vendor skel（跟 AIEngine 对齐）
-    const char* adspPath =
-        "/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp;/vendor/dsp/adsp;/system/lib/rfsa/adsp;/dsp";
-    setenv("ADSP_LIBRARY_PATH", adspPath, 1);
-    LOGI("ADSP_LIBRARY_PATH=%s", adspPath);
+    // 关键：所有 HTP 后端启动前必须先设 ADSP_LIBRARY_PATH，否则 FastRPC 找不到 skel。
+    // libSearchPath 排最前（app nativeLibraryDir），让 unsigned PD 能读到 jniLibs 里的
+    // SDK 2.48 libQnnHtpV81Skel.so；后面的 vendor 路径留给 signed PD 场景兜底。
+    std::string adspPath = libSearchPath;
+    if (!adspPath.empty()) adspPath += ";";
+    adspPath += "/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp;/vendor/dsp/adsp;"
+                "/system/lib/rfsa/adsp;/dsp";
+    setenv("ADSP_LIBRARY_PATH", adspPath.c_str(), 1);
+    LOGI("ADSP_LIBRARY_PATH=%s", adspPath.c_str());
 
     impl_->systemLib = openLib("libQnnSystem.so", libSearchPath);
     if (!impl_->systemLib) {
@@ -382,34 +385,38 @@ bool QairtRuntime::loadDlc(const std::string& dlcPath, BackendType backend) {
     }
     LOGI("QnnBackend_create 成功");
 
-    // 4) Device（HTP 需要显式配置 signed PD + SoC model）
+    // 4) Device（HTP 需要显式配置 PD 模式 + SoC model）
     if (backend == BackendType::HTP) {
         QnnHtpDevice_CustomConfig_t socCfg{};
         socCfg.option = QNN_HTP_DEVICE_CONFIG_OPTION_SOC;
         socCfg.socModel = kSocModel8845;
 
-        QnnHtpDevice_CustomConfig_t signedPdCfg{};
-        signedPdCfg.option = QNN_HTP_DEVICE_CONFIG_OPTION_SIGNEDPD;
-        signedPdCfg.useSignedProcessDomain.deviceId = 0;
-        signedPdCfg.useSignedProcessDomain.useSignedProcessDomain = true;
+        // 走 unsigned PD：配 jniLibs 里的 SDK 2.48 libQnnHtpV81Skel.so（unsigned 版）。
+        // signed PD 会用 vendor 的 signed skel，但 vendor 是 2.46 而我们的 stub 是
+        // SDK 2.48，跨版本 deviceCreate 直接报 0x36b1(14001)。unsigned 路线已在
+        // LLM(Genie) 与 NER(qnn-net-run) 两处真机验证通过。
+        QnnHtpDevice_CustomConfig_t pdCfg{};
+        pdCfg.option = QNN_HTP_DEVICE_CONFIG_OPTION_SIGNEDPD;
+        pdCfg.useSignedProcessDomain.deviceId = 0;
+        pdCfg.useSignedProcessDomain.useSignedProcessDomain = false;
 
         QnnDevice_Config_t socDevCfg{};
         socDevCfg.option = QNN_DEVICE_CONFIG_OPTION_CUSTOM;
         socDevCfg.customConfig = &socCfg;
 
-        QnnDevice_Config_t signedPdDevCfg{};
-        signedPdDevCfg.option = QNN_DEVICE_CONFIG_OPTION_CUSTOM;
-        signedPdDevCfg.customConfig = &signedPdCfg;
+        QnnDevice_Config_t pdDevCfg{};
+        pdDevCfg.option = QNN_DEVICE_CONFIG_OPTION_CUSTOM;
+        pdDevCfg.customConfig = &pdCfg;
 
-        const QnnDevice_Config_t* deviceCfgs[] = {&socDevCfg, &signedPdDevCfg, nullptr};
+        const QnnDevice_Config_t* deviceCfgs[] = {&socDevCfg, &pdDevCfg, nullptr};
         if (iface.deviceCreate) {
             s = iface.deviceCreate(impl_->backendLog, deviceCfgs, &impl_->deviceHandle);
             if (s != QNN_SUCCESS) {
-                LOGE("HTP deviceCreate 失败: 0x%llx (socModel=%u signedPD=1)",
+                LOGE("HTP deviceCreate 失败: 0x%llx (socModel=%u signedPD=0)",
                      (unsigned long long)s, kSocModel8845);
                 return false;
             }
-            LOGI("HTP Device 创建成功 socModel=%u signedPD=1", kSocModel8845);
+            LOGI("HTP Device 创建成功 socModel=%u signedPD=0", kSocModel8845);
         }
     } else {
         // CPU / GPU 直接建默认 device（可以 NULL）

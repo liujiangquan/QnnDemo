@@ -92,11 +92,32 @@ class WordPieceTokenizerTest {
 
     @Test fun tensorBytesAreLittleEndianInt32() {
         val t = tok.encode("字")
-        val bytes = t.toTensorBytes()
+        val names = listOf("input_ids", "token_type_ids", "attention_mask")
+        val bytes = t.toTensorBytes(names)
         assertEquals(3, bytes.size)
         assertEquals(WordPieceTokenizer.MAX_LEN * 4, bytes[0].size)
         // [CLS]=101 的 little-endian int32 = 65 00 00 00
         assertEquals(101.toByte(), bytes[0][0])
         assertEquals(0.toByte(), bytes[0][1])
+    }
+
+    @Test fun tensorBytesBindByNameNotPosition() {
+        val t = tok.encode("你好")
+        // 故意用 DLC 的真实顺序：input_ids, token_type_ids, attention_mask
+        val b = t.toTensorBytes(listOf("input_ids", "token_type_ids", "attention_mask"))
+        // 第 2 个应是全 0 的 token_type_ids，而不是 attention_mask
+        assertTrue("token_type_ids 应全 0", b[1].all { it == 0.toByte() })
+        // 第 3 个是 attention_mask，首位应为 1
+        assertEquals(1.toByte(), b[2][0])
+    }
+
+    @Test fun tensorBytesRejectsUnknownTensorName() {
+        val t = tok.encode("字")
+        try {
+            t.toTensorBytes(listOf("input_ids", "bogus_name"))
+            throw AssertionError("未知张量名应抛异常")
+        } catch (e: IllegalStateException) {
+            assertTrue(e.message!!.contains("bogus_name"))
+        }
     }
 }

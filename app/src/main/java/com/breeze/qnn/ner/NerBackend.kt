@@ -30,6 +30,8 @@ class NerBackend(private val context: Context) : AutoCloseable {
     private val engine = InferenceEngine(context)
     private var tokenizer: WordPieceTokenizer? = null
     private var graphName: String = ""
+    /** DLC 声明的输入张量顺序，喂数据必须按名字对齐（见 TokenizedInput.toTensorBytes） */
+    private var inputNames: List<String> = emptyList()
     private var ready = false
 
     /** 加载 vocab 并初始化 native 运行时。 */
@@ -61,13 +63,31 @@ class NerBackend(private val context: Context) : AutoCloseable {
             return false
         }
         if (!engine.loadDlc(f.absolutePath, backend)) return false
-        graphName = engine.graphInfos.firstOrNull()?.name ?: run {
+        val g = engine.graphInfos.firstOrNull() ?: run {
             Log.e(TAG, "DLC 里没有图")
             return false
         }
+        graphName = g.name
+        inputNames = g.inputs.map { it.name }
+        Log.i(TAG, "输入张量顺序 = $inputNames")
         ready = true
         Log.i(TAG, "DLC 已加载, graph=$graphName backend=$backend")
+        warmup()
         return true
+    }
+
+    /**
+     * 预热一次推理并丢弃结果。
+     *
+     * HTP 上 graphFinalize 之后的**第一次 execute 输出是不可靠的**（实测："马化腾在深圳
+     * 创办了腾讯公司"首次只解出 (LOC, 圳)，第二次起就完全正确）。不预热的话用户第一次
+     * 点"识别"会看到垃圾结果。
+     */
+    private suspend fun warmup() {
+        val tok = tokenizer ?: return
+        val input = tok.encode(WARMUP_TEXT)
+        engine.executeWithOutput(graphName, input.toTensorBytes(inputNames))
+        Log.i(TAG, "warmup 完成")
     }
 
     /**
@@ -94,7 +114,7 @@ class NerBackend(private val context: Context) : AutoCloseable {
         var failed = 0
         sentences.forEachIndexed { idx, sent ->
             val input = tok.encode(sent.text)
-            val outputs = engine.executeWithOutput(graphName, input.toTensorBytes())
+            val outputs = engine.executeWithOutput(graphName, input.toTensorBytes(inputNames))
             val logitsBytes = outputs?.firstOrNull()
             if (logitsBytes == null) {
                 failed++
@@ -129,5 +149,7 @@ class NerBackend(private val context: Context) : AutoCloseable {
         const val DLC_NAME = "bert-ner-fp32.dlc"
         /** 防 UI 卡死的上限 */
         const val MAX_SENTENCES = 50
+        /** 预热用的短句，内容无所谓，只为触发一次 execute */
+        const val WARMUP_TEXT = "预热。"
     }
 }

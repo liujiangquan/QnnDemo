@@ -17,11 +17,33 @@ data class TokenizedInput(
     val offsets: List<IntRange>,
     val validLen: Int,
 ) {
-    /** 转成 DLC 需要的 little-endian int32 字节序（QNN 张量是 Int_32）。 */
-    fun toTensorBytes(): List<ByteArray> = listOf(ids, mask, typeIds).map { arr ->
+    /**
+     * 按 DLC 声明的输入顺序生成张量字节（little-endian int32，QNN 张量是 Int_32）。
+     *
+     * **必须按名字绑定**：实测这份 DLC 的输入顺序是
+     * `input_ids, token_type_ids, attention_mask` —— 跟直觉的
+     * `ids/mask/typeIds` 不同。按位置喂会把 attention_mask 灌进 token_type_ids、
+     * 把全 0 的 typeIds 灌进 attention_mask，导致 attention 屏蔽掉所有位置、
+     * 输出塌成几乎全 O。
+     *
+     * @param inputNames 来自 `engine.graphInfos[i].inputs.map { it.name }`
+     */
+    fun toTensorBytes(inputNames: List<String>): List<ByteArray> = inputNames.map { name ->
+        val arr = when (name) {
+            NAME_INPUT_IDS -> ids
+            NAME_ATTENTION_MASK -> mask
+            NAME_TOKEN_TYPE_IDS -> typeIds
+            else -> error("DLC 出现未知输入张量: $name")
+        }
         ByteBuffer.allocate(arr.size * 4).order(ByteOrder.LITTLE_ENDIAN).apply {
             arr.forEach { putInt(it) }
         }.array()
+    }
+
+    companion object {
+        const val NAME_INPUT_IDS = "input_ids"
+        const val NAME_ATTENTION_MASK = "attention_mask"
+        const val NAME_TOKEN_TYPE_IDS = "token_type_ids"
     }
 }
 
