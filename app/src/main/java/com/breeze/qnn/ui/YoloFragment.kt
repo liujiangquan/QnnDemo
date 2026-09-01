@@ -2,9 +2,7 @@ package com.breeze.qnn.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.os.Bundle
-import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -18,7 +16,6 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
-import androidx.fragment.app.viewModels
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -36,8 +33,8 @@ import java.util.concurrent.Executors
  * CameraX + YOLO26-pose 实时摄像头人体姿态识别。
  *
  * - 默认 HTP 后端；模型文件 /data/user/0/<pkg>/files/yolo/yolo26n-pose.bin（setup_yolo.sh 推过去）
- * - 摄像头每帧 → letterbox fp32 NCHW → backend.infer → YoloPostprocessor.parse →
- *   YoloOverlayView 画框 / 骨架 / RecyclerView 列表
+ * - 摄像头每帧 → ARGB8888 Bitmap → backend.infer(bitmap) → native 做 letterbox+量化+HTP infer
+ *   → parseFlat → YoloOverlayView 画框 / 骨架 / RecyclerView 列表
  *
  * 未授权 / 模型未就绪都给出 Toast，不崩溃。
  */
@@ -103,12 +100,12 @@ class YoloFragment : Fragment() {
 
     private fun runInference(image: ImageProxy) {
         if (!backend.modelReady()) { image.close(); return }
-        val t0 = System.nanoTime()
-        val input = YoloPreprocessor.imageToTensor(image.image!!).tensor
+        val bmp = YoloPreprocessor.imageToBitmap(image.image!!)
         viewLifecycleOwner.lifecycleScope.launch(Dispatchers.Default) {
-            val outs = backend.infer(input) ?: run { image.close(); return@launch }
-            val dets = YoloPostprocessor.parse(
-                outs, YoloBackend.COCO_POSE_80,
+            val t0 = System.nanoTime()
+            val flat = backend.infer(bmp) ?: run { image.close(); return@launch }
+            val dets = YoloPostprocessor.parseFlat(
+                flat, YoloBackend.COCO_POSE_80,
                 confThr = 0.25f, iouThr = 0.45f,
             )
             val elapsed = (System.nanoTime() - t0) / 1_000_000L

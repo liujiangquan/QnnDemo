@@ -86,6 +86,39 @@ android {
 }
 
 // ============================================================
+// 安全网：strip SDK 2.48 HTP 系列 lib 防止打包进 APK
+//
+// YOLO-pose 真机 HTP 走 vendor 2.46 stub/skel/skel（SDK 2.48 stub + vendor
+// 2.46 skel 跨版本 FastRPC handshake 会 AEE_EBADCLASS 0x80000600）。priv-app
+// 内不需要再打包 SDK 版，让 dlopen candidate chain 掉到 /vendor/lib64/<name>
+// 拉 vendor 2.46。
+//
+// 同时保留：libQnnSystem/libQnnCpu/libQnnGpu（vendor 不提供）+ LLM/Genie。
+// ============================================================
+tasks.register("stripSdkHtpJniLibs", Delete::class.java) {
+    delete(
+        fileTree("src/main/jniLibs") {
+            include(
+                "**/libQnnHtp.so",
+                "**/libQnnHtpV81Stub.so",
+                "**/libQnnHtpV81Skel.so",
+                "**/libQnnHtpPrepare.so",
+                "**/libQnnHtpNetRunExtensions.so",
+                "**/libQnnHtpV81CalculatorStub.so"
+            )
+        }
+    )
+}
+
+// ============================================================
+// 把 strip 任务挂到 preBuild 上：setup_demo.ps1 误回填 SDK HTP lib 时
+// 构建自动剔除，无需人工干预。
+// ============================================================
+tasks.named("preBuild").configure {
+    dependsOn("stripSdkHtpJniLibs")
+}
+
+// ============================================================
 // androidTest APK 统签
 //
 // 统签插件只 hook packageDebug/packageRelease，不覆盖 packageDebugAndroidTest。
@@ -133,6 +166,7 @@ dependencies {
 
     // CameraX (YOLO 实时摄像头：Preview + ImageAnalysis)
     implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
 

@@ -85,12 +85,12 @@ if (-not (Test-Path $JniLibsDir)) { New-Item -ItemType Directory -Force -Path $J
 $RequiredLibs = @("libQnnSystem.so", "libQnnCpu.so")
 $OptionalLibs = @(
     # GPU 后端（vendor 不提供）
-    "libQnnGpu.so",
-    # HTP 后端 —— 注意：SDK 版本的 libQnnHtp*/libQnnHtpV81Stub.so 会跟 vendor
-    # firmware 的 signed skel 版本不匹配（AEE_ENOSUCHMOD 0x80000406）。
-    # 生产环境应通过 <uses-native-library> 从 /vendor/lib64/ 加载 vendor 版本，
-    # 或运行 docs/pull_vendor_htp_libs.sh 覆盖为 vendor 版本。
-    "libQnnHtp.so", "libQnnHtpV81Stub.so", "libQnnHtpPrepare.so"
+    "libQnnGpu.so"
+    # ⚠️ HTP 后端不在这里列 —— 真机 HTP 走 vendor 2.46 libQnnHtp*.so，
+    # 由 openLib candidate chain 在 /vendor/lib64/<name> 找到。
+    # 若 SDk 版的 libQnnHtp*.so 进了 jniLibs，会被 stripSdkHtpJniLibs preBuild 任务
+    # 剔除以防 vendor 2.46 skel 跟 SDK 2.48 stub 跨版本 handshake AEE_EBADCLASS 0x80000600。
+    # Genie/LLM 由 libGenie.so + libQnnGenAiTransformer*.so 提供（仍在 SDK 内）。
 )
 
 $copiedCount = 0

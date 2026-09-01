@@ -17,10 +17,6 @@ class YoloBackendTest {
         assertEquals("person", YoloBackend.COCO_POSE_80[0])
     }
 
-    @Test fun `expected input bytes is 1x3x640x640 fp32`() {
-        assertEquals(1 * 3 * 640 * 640 * 4, YoloBackend.EXPECTED_INPUT_BYTES)
-    }
-
     @Test fun `Detection stores keypoints and exposes visibleKeypoints`() {
         // android.jar unit-test stub PointF 的 equals 等方法是 "not mocked"，会抛异常，
         // 所以这里不调用 List.equals((PointF) 而是直接比容量。

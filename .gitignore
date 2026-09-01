@@ -42,3 +42,7 @@ local.properties
 
 # Python caches
 __pycache__/
+
+# Scratch (path-mangling artifacts, UI dumps) — none of these belong to YOLO T13
+C:/
+ui.xml

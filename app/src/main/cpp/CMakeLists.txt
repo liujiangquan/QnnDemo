@@ -33,6 +33,8 @@ add_library(qnndemo SHARED
     qairt_runtime.cpp
     llm_runtime.cpp
     llm_jni.cpp
+    yolo_pose.cpp
+    yolo_jni.cpp
 )
 
 target_include_directories(qnndemo PRIVATE
