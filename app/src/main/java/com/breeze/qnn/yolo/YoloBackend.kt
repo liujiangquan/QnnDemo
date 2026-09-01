@@ -66,7 +66,9 @@ class YoloBackend(private val context: Context) : AutoCloseable {
     /**
      * 喂一张 Bitmap（ARGB8888），返回 flat float[]：
      * [count, count × (conf, x1, y1, x2, y2, 17 × (x, y, vis))]
-     * 全部坐标都在 640×640 tensor 空间（未反 letterbox）。
+     * 全部坐标都在该 bitmap 的像素空间（native decodePose 已反 letterbox 回 bitmap 原始尺寸），
+     * 即 [Detection.box] / [Detection.keypoints] 喂进来的 bitmap 多大坐标就多大——YoloOverlayView
+     * 按 bitmap 实际宽高比缩放到 view 即可，不要把 640 当缩放基准。
      */
     suspend fun infer(bitmap: Bitmap): FloatArray? = suspendCoroutine { cont ->
         if (!ready) {

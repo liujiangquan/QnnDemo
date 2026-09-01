@@ -13,9 +13,12 @@ import com.breeze.qnn.yolo.Detection
 /**
  * 在 camera preview 上叠 bbox + 17 个 COCO keypoints + 骨架。
  *
- * 坐标是 640×640 tensor 空间；按 view 尺寸等比缩放到当前 view。
- * letterbox 反演交给 fragment 传入的 detections 处理（当前 MVP 阶段先 linear scale，
- * 因 camera preview 多已裁切到接近 640×640，T13 实测时再视偏差补 un-letterbox）。
+ * 坐标是 [backend.infer] 输入的 bitmap 像素（native 已反 letterbox 回该 bitmap 原始尺寸）；
+ * [bitW]×[bitH] 是喂给 native 的 bitmap 实际宽高（portrait 摄像头常为 1080×1920）。onDraw
+ * 用与 PreviewView 默认 FILL_CENTER 一致的等比例铺满映射（S=max，view 中心对齐），
+ * 比 640 更能贴合实际铺满画面——640 基准会把框/点挤到左上角。
+ *
+ * 用 [setBitmapSize] 把真实 bitmap 尺寸喂进来。
  */
 class YoloOverlayView @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null
@@ -23,6 +26,15 @@ class YoloOverlayView @JvmOverloads constructor(
 
     var detections: List<Detection> = emptyList()
         set(value) { field = value; invalidate() }
+
+    /** 喂给 native 的 bitmap 尺寸；决定 onDraw 缩放基准。未设置时默认 640（兜底）。 */
+    var bitW: Int = 640
+    var bitH: Int = 640
+        set(value) { field = value; invalidate() }
+
+    fun setBitmapSize(w: Int, h: Int) {
+        if (w != bitW || h != bitH) { bitW = w; bitH = h; invalidate() }
+    }
 
     private val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE; strokeWidth = 4f; color = Color.GREEN
@@ -55,20 +67,26 @@ class YoloOverlayView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        // 与 PreviewView (默认 FILL_CENTER) 一致的等比例铺满映射：统一缩放 S=max(…/bitW, …/bitH)
+        // 填满 view，并以 view 中心对齐（bitmap 中心 ↔ view 中心）。bitmap 宽高比 == view 宽高比
+        // 时退化为简单线性映射；不等时按中心裁切，避免边缘框点被各向异性缩放挤偏。
         val vw = width.toFloat(); val vh = height.toFloat()
-        val sx = vw / 640f; val sy = vh / 640f
+        val s = maxOf(vw / bitW, vh / bitH)
+        val ox = (vw - bitW * s) * 0.5f; val oy = (vh - bitH * s) * 0.5f
+        fun tx(bx: Float) = bx * s + ox
+        fun ty(by: Float) = by * s + oy
         for (det in detections) {
-            val l = det.box.left * sx; val t = det.box.top * sy
-            val r = det.box.right * sx; val b = det.box.bottom * sy
+            val l = tx(det.box.left); val t = ty(det.box.top)
+            val r = tx(det.box.right); val b = ty(det.box.bottom)
             canvas.drawRect(l, t, r, b, boxPaint)
             for (kp in det.visibleKeypoints) {
-                canvas.drawCircle(kp.x * sx, kp.y * sy, 5f, kptPaint)
+                canvas.drawCircle(tx(kp.x), ty(kp.y), 5f, kptPaint)
             }
             for ((a, bIdx) in SKELETON) {
                 if (a >= det.keypoints.size || bIdx >= det.keypoints.size) continue
                 val ka = det.keypoints[a]; val kb = det.keypoints[bIdx]
                 if (ka.x.isNaN() || kb.x.isNaN()) continue
-                canvas.drawLine(ka.x * sx, ka.y * sy, kb.x * sx, kb.y * sy, bonePaint)
+                canvas.drawLine(tx(ka.x), ty(ka.y), tx(kb.x), ty(kb.y), bonePaint)
             }
         }
     }

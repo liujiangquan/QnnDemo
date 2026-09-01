@@ -100,7 +100,9 @@ class YoloFragment : Fragment() {
 
     private fun runInference(image: ImageProxy) {
         if (!backend.modelReady()) { image.close(); return }
-        val bmp = YoloPreprocessor.imageToBitmap(image.image!!)
+        // imageInfo.rotationDegrees：把 sensor 朝向的像素旋到自然朝向，native 才能据此输出
+        // 与 PreviewView 展示一致的 bitmap 坐标系，overlay 才不会错位。
+        val bmp = YoloPreprocessor.imageToBitmap(image.image!!, image.imageInfo.rotationDegrees)
         viewLifecycleOwner.lifecycleScope.launch(Dispatchers.Default) {
             val t0 = System.nanoTime()
             val flat = backend.infer(bmp) ?: run { image.close(); return@launch }
@@ -111,6 +113,7 @@ class YoloFragment : Fragment() {
             val elapsed = (System.nanoTime() - t0) / 1_000_000L
             val result = YoloResult(dets, elapsed, image.width, image.height)
             withContext(Dispatchers.Main) {
+                overlay.setBitmapSize(bmp.width, bmp.height)
                 overlay.detections = dets
                 adapter.submit(dets)
                 tvStats.text = "${result.elapsedMs}ms · ${dets.size} 检测 · " +

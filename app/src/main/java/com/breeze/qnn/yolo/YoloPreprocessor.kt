@@ -1,13 +1,19 @@
 package com.breeze.qnn.yolo
 
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.media.Image
 
 /** 工具：从 CameraX ImageProxy (YUV_420_888) 转 Bitmap。仅被 YoloFragment 用。
- *  letterbox + 量化喂给 vendor bin 的事交给 native [YoloPoseSession.inferRgb]。 */
+ *  letterbox + 量化喂给 vendor bin 的事交给 native [YoloPoseSession.inferRgb]。
+ *
+ * ImageProxy 的像素排在 sensor 朝向；[image.imageInfo.rotationDegrees] 是帧相对 sensor
+ * 需额外旋转到“自然朝向”的角度。native 最终在 bitmap 坐标系输出 bbox/kpt，所以这里
+ * 把 bitmap 预先旋到自然朝向（与 PreviewView 展示一致），后续 overlay 才能对齐。 */
 object YoloPreprocessor {
 
-    fun imageToBitmap(image: Image): Bitmap {
+    /** 把 ImageProxy 转成自然朝向的 ARGB8888 bitmap。 */
+    fun imageToBitmap(image: Image, rotationDegrees: Int = 0): Bitmap {
         val w = image.width; val h = image.height
         val yuv = image.planes[0].buffer
         val yBytes = ByteArray(yuv.remaining()).also { yuv.get(it) }
@@ -40,6 +46,12 @@ object YoloPreprocessor {
                 rgb[j * w + i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
             }
         }
-        return Bitmap.createBitmap(rgb, w, h, Bitmap.Config.ARGB_8888)
+        val src = Bitmap.createBitmap(rgb, w, h, Bitmap.Config.ARGB_8888)
+        // ImageProxy 像素在 sensor 朝向。native 在 bitmap 坐标系输出 bbox/kpt，
+        // 所以这里把 bitmap 预先旋到自然朝向（与 PreviewView 展示一致），后续 overlay 才能对齐。
+        return if (rotationDegrees != 0) {
+            val m = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
+            Bitmap.createBitmap(src, 0, 0, w, h, m, true)
+        } else src
     }
 }
