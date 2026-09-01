@@ -4,7 +4,7 @@
 
 ## 1. Goal
 
-在 8845 Hexagon V81 上跑 YOLO26-pose 模型，**通过手机摄像头实时识别画面中的人体姿态**：检测人体边界框 + 17 COCO keypoints（24 点输出）× 多人，并在 PreviewView 上叠加绘制骨架。
+在 8845 Hexagon V81 上跑 YOLO26-pose 模型，**通过手机摄像头实时识别画面中的人体姿态**：检测人体边界框 + 17 COCO keypoints（end2end head 单输出 `output0 [1,300,57]`，top-300 已烘焙）× 多人，并在 PreviewView 上叠加绘制骨架。
 
 - 后端：QNN Direct API + fp16 context binary 走 HTP（复用 NerBackend 那套 Infrastructure）
 - UI：MainActivity BottomNav 加第 5 个 tab（YOLO），实时预览 + 叠加框 + 检测列表 + FPS/延迟
@@ -19,15 +19,16 @@
 |---|---|---|
 | 文件 | `D:/workspace/models/yolo/yolo26n-pose.pt` (7.5MB) | 用户提供 |
 | 格式 | Ultralytics 新版 zip-pt（best/data.pkl + 权重张量） | 文件头 `PK\\x03\\x04` |
-| 框架 | ultralytics **8.3.222** | data.pkl 中 `version: 8.3.222` |
+| 框架 | ultralytics **8.3.222**（.pt 内版本；转换用 venv 8.4.137 实测 OK） | data.pkl 中 `version: 8.3.222` |
 | Python 类 | `ultralytics.nn.tasks.PoseModel` | data.pkl |
-| 项目 | `YOLO26-pose` | data.pkl `project` 字段 |
-| 训练集 | COCO-pose (80 类, 24 keypoint) | data.pkl `dataset: coco-pose.yaml` |
+| 项目 | `YOLO26-pose`（tag `yolo26n-pose-o2m1-cls_w2-rle1-pose24-box75-df` 是训练 run 名，pose24 指迭代编号不是 kpt 数） | data.pkl |
+| 训练集 | COCO-pose (80 类) | data.pkl `dataset: coco-pose.yaml` |
 | 输入 | 1×3×640×640, batch 训练用 128 | data.pkl `imgsz: 640, batch: 128` |
-| Head | **end2end**（直接输出解码框，无 NMS） | 文件名 `o2m1-cls_w2-rle1-pose24-box75-df` + pickle 中 `end2end: True` |
+| Head | **end2end**（直接输出解码框，无 NMS） | 文件名 + pickle 中 `end2end: True` |
+| **输出** | **单张量 `output0 [1, 300, 57]`**（T2 ONNX export 实测） | T2 实测;  breakdown 见 4.3 |
 | 优化 | one-to-many (1 个 N 候选) | `o2m1` |
 
-COCO-pose 80 类（person + 79 类物体），24 keypoints（比标准 COCO 17 点多 7 个，是 YOLO26 扩展点集）。
+COCO-pose 80 类（person + 79 类物体），**17 keypoints**（标准 COCO 点数；T2 ONNX export 实测输出 [1,300,57]，4+1+51+1 = 4 bbox + 1 conf + 17×3 kpt + 1 padding）。
 
 ### 2.2 转换 pipeline（在 WSL 跑，per memory QAIRT converter 只能在 WSL）
 
@@ -102,7 +103,7 @@ Step 1 之前先用 `qnn-converter --dry_run` 之类的选项探一下 op 支持
 [InferenceEngine.executeWithOutput]─────┘
     │ List<ByteArray> (raw model outputs)
     ▼
-[YoloPostprocess] → List<Detection> (box + cls + 24 kpts + score)
+[YoloPostprocess] → List<Detection> (box + cls + 17 kpts + score)
     │
     ▼
 [YoloViewModel.state.publish] → [YoloFragment.render]
@@ -192,33 +193,39 @@ class YoloBackend(context: Context) : AutoCloseable {
 
 ### 4.3 Post-process (Kotlin，起步)
 
-输出（end2end head，3 个张量，典型形状）：
-- `dets`: `[1, num_dets, 6]` = (cx, cy, w, h, cls_conf, cls_id) — top-K 已 NMS
-- `kpts`: `[1, num_dets, 24, 3]` = (x, y, visible) per keypoint
-- `num_dets` 是小维度（理论上限如 300），来自 TopK
+输出（end2end head，**单张量**，T2 实测 shape）：
 
-若导出 ONNX 后 Shapes 不同，按实际改。
+T2 ONNX export 实测：output0 = `[1, 300, 57]` flat，即 batch=1、top-300 pre-NMS 候选（NMS 已烘焙进 head）、57 个通道数/检测。flat 排列共 300×57 = 17100 个 fp32。
+
+通道布局**待 T7 用 onnxruntime 验证**（预期，但可能不准）：
+
+- `[0:4]` = bbox (cx, cy, w, h) in 640×640 tensor 空间
+- `[4]` = objectness score
+- `[5:56]` = 17 keypoints × 3 (x, y, visible) → 51 通道
+- `[56]` = 1 个 padding（或 class score，待验证）
+
+若 onnxruntime 验证发现实际通道数不同（如 17 kpt × 3 = 51 不符 → 也许是 17×3 + 3 padding），按实际调整索引。
 
 ```kotlin
 data class Detection(
     val cls: Int, val clsName: String,
     val score: Float,
     val box: RectF,           // xyxy in 640x640 tensor space
-    val keypoints: List<PointF>  // 24 个 (x,y)
+    val keypoints: List<PointF>  // 17 个 (x,y)，visible 的才填，NaN 表示不可见
 )
 
 fun parse(raw: List<ByteArray>, names: List<String>, confThr: Float, iouThr: Float): List<Detection> {
-    // 1. 读 dets: [1, N, 6] — 过滤 confThr
-    // 2. NMS (IoU, 同类别)
-    // 3. 读 kpts: [1, N, 24, 3] — 过滤 visible > 0.5
-    // 4. 框和 keypoint 坐标从 letterbox tensor space 反演回原始预览分辨率
+    // 1. 读 flat [1, 300, 57]: 过滤 confThr
+    // 2. NMS (IoU, 同类别 — 若 end2end head 已烘焙 NMS 则跳过)
+    // 3. 解析 kpt offset [5:56] → 17 × 3 (x, y, visible), 过滤 visible > 0.5
+    // 4. 框和 keypoint 坐标从 640×640 tensor 空间反演回原始预览分辨率
 }
 ```
 
 ### 4.4 YoloFragment + YoloOverlayView
 
 - `YoloFragment`: 持有 PreviewView (CameraX) + Overlay + RecyclerView + FPS TextView
-- `YoloOverlayView`: 自定义 View，绑定到 PreviewView 坐标系，draw 框 + 骨架线（24 keypoint 按 YOLO26 pose 定义连边）
+- `YoloOverlayView`: 自定义 View，绑定到 PreviewView 坐标系，draw 框 + 骨架线（17 keypoint 按 COCO 骨架连边）
 - Lifecycle 用 CameraX `ProcessCameraProvider` + `Preview` + `ImageAnalysis` (STRATEGY_KEEP_ONLY_LATEST)
 - 推理在 ImageAnalysis callback 里异步跑（协程），避免阻塞
 - 每帧：ImageProxy → 转 ByteBuffer → 推理 → decode → postValue → overlay 重绘
@@ -279,7 +286,7 @@ adb shell "chmod 644 $DST"
 
 `app/src/androidTest/java/com/breeze/qnn/yolo/YoloE2ETest.kt`：
 - 喂一张包含单人站立的 test 图（从 assets/yolo_test.jpg 读取）
-- Instrumentation → YoloBackend.detect(bitmap) → 断言返回 ≥ 1 个 detection, cls == person, box 合理, keypoints 数 == 24
+- Instrumentation → YoloBackend.detect(bitmap) → 断言返回 ≥ 1 个 detection, cls == person, box 合理, keypoints 数 == 17
 - 跑通标准：至少检测到 1 个 person 框 + 至少 5 个可见 keypoint
 
 提供测试图：从 COCO val 取一张单人图，压缩成 assets/yolo_test.jpg (480×640 即可)。
@@ -289,7 +296,7 @@ adb shell "chmod 644 $DST"
 | 风险 | 可能性 | 缓解 |
 |---|---|---|
 | end2end head 含 QNN 不支持 op | 中 | Step 1 之前先用 qnn-converter 探伤；失败退回标准 Detect(Pose) 头 + 手工 NMS（方案 B） |
-| 24 keypoints schema 与 YOLO26 自定义格式不符 | 中 | 导出 ONNX 后 `netron.app` 可视化 + 读 ultralytics PoseModel 源码确认 kpt 排列 |
+| 17 keypoint schema 与导出 ONNX 实测不符 | 中 | T2 之后用 onnxruntime 跑 dummy input 验证 layout；T7 按实测布局解析 |
 | Camera2/PreviewView 坐标系与 overlay 不一致 | 低 | 用 `PreviewView.scaleType="fitCenter"` + 在 onDraw 用矩阵变换镜像 |
 | 640×640 letterbox 反演坐标偏差 | 低 | 反演时用原始缩放比 (min(W,H)/640) × padding 偏移 |
 | 实时 FPS 不够 | 中 | 起步 Kotlin 实现，不够再下沉 native（prepost.cpp） |
@@ -326,7 +333,7 @@ T13: 真机验证 + 文档 + PR
 
 - [ ] APK 多一个 "YOLO" BottomNav tab，不闪退
 - [ ] Camera 预览 ≤ 1s 出图
-- [ ] 人体 bbox + 24 keypoints 实时叠加
+- [ ] 人体 bbox + 17 keypoints 实时叠加
 - [ ] FPS ≥ 15, latency ≤ 66ms
 - [ ] CAMERA 运行时权限处理正确（拒绝 → 提示；授权 → 启动预览）
 - [ ] 切到 Chat/NER/Settings 再切回 YOLO 不重启预览
