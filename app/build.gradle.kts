@@ -131,6 +131,11 @@ dependencies {
     implementation("androidx.fragment:fragment-ktx:1.6.2")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
 
+    // CameraX (YOLO 实时摄像头：Preview + ImageAnalysis)
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+
     testImplementation(libs.junit)
     // Android 自带的 org.json 在 JVM 单测里只有抛异常的 stub（"not mocked"），
     // 引真实现让 NerGoldenTest 能解析 golden fixture

@@ -26,4 +26,8 @@
     <!-- 占位 -->
     <string name="placeholder_graph_info">加载 DLC 后将显示图与张量信息…</string>
     <string name="placeholder_log">运行日志将显示在此…</string>
+
+    <!-- YOLO 实时姿态识别 -->
+    <string name="title_yolo">实时姿态识别</string>
+    <string name="hint_yolo_permission">需要摄像头权限才能识别姿态</string>
 </resources>
