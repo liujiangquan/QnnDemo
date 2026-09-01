@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:id="@+id/nav_backend"  android:title="Backend"/>
-    <item android:id="@+id/nav_chat"     android:title="Chat"/>
-    <item android:id="@+id/nav_ner"      android:title="NER"/>
-    <item android:id="@+id/nav_settings" android:title="Settings"/>
+    <item android:id="@+id/nav_backend"  android:title="Backend" android:icon="@android:drawable/ic_menu_manage"/>
+    <item android:id="@+id/nav_yolo"     android:title="YOLO"    android:icon="@android:drawable/ic_menu_camera"/>
+    <item android:id="@+id/nav_chat"     android:title="Chat"    android:icon="@android:drawable/ic_menu_share"/>
+    <item android:id="@+id/nav_ner"      android:title="NER"     android:icon="@android:drawable/ic_menu_search"/>
+    <item android:id="@+id/nav_settings" android:title="Settings" android:icon="@android:drawable/ic_menu_preferences"/>
 </menu>
+

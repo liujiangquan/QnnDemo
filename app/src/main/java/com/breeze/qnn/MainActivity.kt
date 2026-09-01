@@ -10,6 +10,7 @@ import com.breeze.qnn.ui.BackendFragment
 import com.breeze.qnn.ui.ChatFragment
 import com.breeze.qnn.ui.NerFragment
 import com.breeze.qnn.ui.SettingsFragment
+import com.breeze.qnn.ui.YoloFragment
 import com.google.android.material.bottomnavigation.BottomNavigationView
 
 class MainActivity : AppCompatActivity() {
@@ -34,6 +35,7 @@ class MainActivity : AppCompatActivity() {
             .setOnItemSelectedListener { item ->
                 when (item.itemId) {
                     R.id.nav_backend  -> switchTo(BackendFragment())
+                    R.id.nav_yolo     -> switchTo(YoloFragment())
                     R.id.nav_chat     -> switchTo(ChatFragment())
                     R.id.nav_ner      -> switchTo(NerFragment())
                     R.id.nav_settings -> switchTo(SettingsFragment())
