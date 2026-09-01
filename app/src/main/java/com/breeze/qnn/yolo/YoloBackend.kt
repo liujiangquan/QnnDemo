@@ -33,6 +33,10 @@ class YoloBackend(private val context: Context) : AutoCloseable {
             Log.e(TAG, "模型不存在: ${f.absolutePath}")
             return false
         }
+        if (!engine.init()) {
+            Log.e(TAG, "InferenceEngine.init 失败")
+            return false
+        }
         Log.i(TAG, "加载 context binary: ${f.name}")
         modelKind = "fp16 ctx"
         val ok = engine.loadContextBinary(f.absolutePath, backend)
