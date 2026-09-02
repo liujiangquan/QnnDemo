@@ -15,10 +15,12 @@ object YoloPreprocessor {
     /** 把 ImageProxy 转成自然朝向的 ARGB8888 bitmap。 */
     fun imageToBitmap(image: Image, rotationDegrees: Int = 0): Bitmap {
         val w = image.width; val h = image.height
-        val yuv = image.planes[0].buffer
-        val yBytes = ByteArray(yuv.remaining()).also { yuv.get(it) }
+        val yPlane = image.planes[0]
         val uPlane = image.planes[1]
         val vPlane = image.planes[2]
+        val yuv = yPlane.buffer
+        val yBytes = ByteArray(yuv.remaining()).also { yuv.get(it) }
+        val yRowStride = yPlane.rowStride
         val uRowStride = uPlane.rowStride
         val vRowStride = vPlane.rowStride
         val uPixStride = uPlane.pixelStride
@@ -36,7 +38,7 @@ object YoloPreprocessor {
         }
         for (j in 0 until h) {
             for (i in 0 until w) {
-                val y = yBytes[j * w + i].toInt() and 0xFF
+                val y = yBytes[j * yRowStride + i].toInt() and 0xFF
                 val uvIdx = (j / 2) * (w / 2) + (i / 2)
                 val u = (uv[uvIdx] ushr 8) and 0xFF
                 val v = uv[uvIdx] and 0xFF

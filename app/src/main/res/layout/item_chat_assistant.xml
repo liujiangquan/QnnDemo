@@ -10,6 +10,7 @@
         android:layout_height="wrap_content"
         android:background="#EEEEEE"
         android:padding="12dp"
+        android:textColor="#212121"
         android:textSize="16sp"/>
     <TextView
         android:id="@+id/assistant_meta"
@@ -17,6 +18,6 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
         android:textSize="12sp"
-        android:textColor="#888"
+        android:textColor="#BDBDBD"
         android:visibility="gone"/>
 </LinearLayout>

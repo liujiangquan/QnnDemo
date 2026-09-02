@@ -9,10 +9,8 @@ import android.text.style.ForegroundColorSpan
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
-import android.widget.Spinner
 import android.widget.TextView
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.viewModels
@@ -26,7 +24,7 @@ import com.breeze.qnn.ner.Entity
  * 中文敏感信息识别（BERT NER on 8845 HTP）。
  *
  * 输入文本 → 高亮标记 PER/LOC/ORG/TIME 与正则命中的手机号/身份证/银行卡/邮箱/车牌，
- * 下方列出实体明细。后端可切 HTP / CPU 对比（实测 HTP ~17ms、CPU ~101ms，精度都达标）。
+ * 下方列出实体明细。固定走 HTP（预编译 context binary，单句 ~17ms）。
  */
 class NerFragment : Fragment() {
 
@@ -34,13 +32,10 @@ class NerFragment : Fragment() {
     private lateinit var banner: TextView
     private lateinit var etInput: EditText
     private lateinit var btnRecognize: Button
-    private lateinit var spinner: Spinner
     private lateinit var tvHighlight: TextView
     private lateinit var rvEntities: RecyclerView
     private lateinit var tvStats: TextView
     private lateinit var adapter: EntityAdapter
-
-    private val backends = listOf(QnnNative.Backend.HTP, QnnNative.Backend.CPU)
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View =
         inflater.inflate(R.layout.fragment_ner, container, false)
@@ -49,7 +44,6 @@ class NerFragment : Fragment() {
         banner = view.findViewById(R.id.status_banner)
         etInput = view.findViewById(R.id.et_ner_input)
         btnRecognize = view.findViewById(R.id.btn_recognize)
-        spinner = view.findViewById(R.id.spinner_backend)
         tvHighlight = view.findViewById(R.id.tv_highlight)
         rvEntities = view.findViewById(R.id.rv_entities)
         tvStats = view.findViewById(R.id.tv_ner_stats)
@@ -59,19 +53,12 @@ class NerFragment : Fragment() {
         rvEntities.adapter = adapter
         tvHighlight.movementMethod = android.text.method.ScrollingMovementMethod()
 
-        spinner.adapter = ArrayAdapter(
-            requireContext(),
-            android.R.layout.simple_spinner_dropdown_item,
-            backends.map { "后端: $it" },
-        )
-        spinner.setOnItemSelectedListener()
-
         etInput.setText(SAMPLE_TEXT)
 
         viewModel.state.observe(viewLifecycleOwner) { st ->
             when (st) {
                 NerViewModel.State.INIT -> showBanner("初始化中…")
-                NerViewModel.State.LOADING -> showBanner("加载模型中（HTP 走预编译 ctx 约 0.4s；CPU 要现场编图 3-5s）…")
+                NerViewModel.State.LOADING -> showBanner("加载模型中（HTP 预编译 ctx，约 0.4s）…")
                 NerViewModel.State.MODEL_MISSING -> showBanner(
                     "模型未预置。请跑：\nbash docs/setup_bert_ner.sh"
                 )
@@ -105,15 +92,6 @@ class NerFragment : Fragment() {
         }
 
         viewModel.initIfNeeded()
-    }
-
-    private fun Spinner.setOnItemSelectedListener() {
-        onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                viewModel.selectBackend(backends[pos])
-            }
-            override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
-        }
     }
 
     private fun showBanner(msg: String) {

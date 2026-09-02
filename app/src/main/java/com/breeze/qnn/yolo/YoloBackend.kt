@@ -50,7 +50,7 @@ class YoloBackend(private val context: Context) : AutoCloseable {
             // 用 isNullOrEmpty 同时兼容两种 JNI 风格。
             if (err.isNullOrEmpty()) {
                 ready = true
-                modelKind = "fp16 ctx (vendor bin, build v2.46)"
+                modelKind = "fp16 ctx (vendor bin, build v2.46, uint16 raw-anchor)"
                 Log.i(TAG, "YOLO 加载成功 modelKind=$modelKind")
                 cont.resume(true)
             } else {
