@@ -29,6 +29,8 @@
 #include "QnnLog.h"
 #include "QnnTypes.h"
 #include "System/QnnSystemContext.h"
+#include "HTP/QnnHtpDevice.h"
+#include "HTP/QnnHtpDeviceConfigShared.h"
 
 namespace {
 
@@ -147,7 +149,8 @@ std::string YoloPoseSession::init(
     if (nativeLibDir == nullptr || contextBin == nullptr || contextBytes == 0) {
         return "invalid init arguments";
     }
-    std::string adsp = "/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp";
+    std::string adsp = nativeLibDir;
+    adsp += ";/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp;/vendor/dsp/adsp;/system/lib/rfsa/adsp;/dsp";
     setenv("ADSP_LIBRARY_PATH", adsp.c_str(), 1);
     if (!loadInterfaces(nativeLibDir)) {
         return "failed to load QNN HTP/System interfaces";
@@ -330,7 +333,21 @@ bool YoloPoseSession::createSession(
         return false;
     }
     if (mQnn.deviceCreate != nullptr) {
-        if (mQnn.deviceCreate(mLogHandle, nullptr, &mDevice) != QNN_SUCCESS) {
+        QnnHtpDevice_CustomConfig_t socCfg{};
+        socCfg.option = QNN_HTP_DEVICE_CONFIG_OPTION_SOC;
+        socCfg.socModel = 685U;
+        QnnHtpDevice_CustomConfig_t pdCfg{};
+        pdCfg.option = QNN_HTP_DEVICE_CONFIG_OPTION_SIGNEDPD;
+        pdCfg.useSignedProcessDomain.deviceId = 0;
+        pdCfg.useSignedProcessDomain.useSignedProcessDomain = false;
+        QnnDevice_Config_t socDevCfg{};
+        socDevCfg.option = QNN_DEVICE_CONFIG_OPTION_CUSTOM;
+        socDevCfg.customConfig = &socCfg;
+        QnnDevice_Config_t pdDevCfg{};
+        pdDevCfg.option = QNN_DEVICE_CONFIG_OPTION_CUSTOM;
+        pdDevCfg.customConfig = &pdCfg;
+        const QnnDevice_Config_t* deviceCfgs[] = {&socDevCfg, &pdDevCfg, nullptr};
+        if (mQnn.deviceCreate(mLogHandle, deviceCfgs, &mDevice) != QNN_SUCCESS) {
             logAndroid(ANDROID_LOG_WARN, "deviceCreate failed, continuing without device handle");
             mDevice = nullptr;
         }

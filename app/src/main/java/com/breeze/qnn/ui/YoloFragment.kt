@@ -3,6 +3,7 @@ package com.breeze.qnn.ui
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.view.Surface
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -12,6 +13,7 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.UseCaseGroup
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -68,8 +70,12 @@ class YoloFragment : Fragment() {
         rv.layoutManager = LinearLayoutManager(requireContext())
         rv.adapter = adapter
 
-        if (allPermissionsGranted()) startCamera() else requestPermissions(
-            arrayOf(Manifest.permission.CAMERA), REQ_CAMERA)
+        if (allPermissionsGranted()) {
+            // viewPort 要等 PreviewView layout 完成才非空（参考 QnnYolo 项目的做法）
+            previewView.post { startCamera() }
+        } else {
+            requestPermissions(arrayOf(Manifest.permission.CAMERA), REQ_CAMERA)
+        }
 
         viewLifecycleOwner.lifecycleScope.launch {
             val ok = backend.loadModel()
@@ -86,7 +92,15 @@ class YoloFragment : Fragment() {
         val provider = ProcessCameraProvider.getInstance(requireContext()).get()
         val preview = Preview.Builder().build()
             .also { it.setSurfaceProvider(previewView.surfaceProvider) }
+        // ViewPort 必须取 PreviewView 自己的（与它实际宽高比一致），硬编码比例会让两条流
+        // crop 不一致 → overlay 相对 preview 错位。
+        // setOutputImageRotationEnabled 让 CameraX 直接把 buffer 旋到目标朝向，
+        // 此后 rotationDegrees 为 0，bitmap 无需再旋。
+        val viewPort = previewView.viewPort ?: return
+        val rotation = previewView.display?.rotation ?: Surface.ROTATION_0
         val analysis = ImageAnalysis.Builder()
+            .setOutputImageRotationEnabled(true)
+            .setTargetRotation(rotation)
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build()
             .also { ia ->
@@ -94,7 +108,8 @@ class YoloFragment : Fragment() {
             }
         provider.unbindAll()
         provider.bindToLifecycle(viewLifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA,
-            preview, analysis)
+            UseCaseGroup.Builder().addUseCase(preview).addUseCase(analysis)
+                .setViewPort(viewPort).build())
         started = true
     }
 
