@@ -11,6 +11,7 @@
 - **图/张量元信息查询**：加载模型后展示图名、输入/输出张量维度、数据类型、字节数
 - **推理计时**：单次推理耗时统计（毫秒级）
 - **Material Design 3 风格 UI**：卡片式布局，后端选择、模型加载、推理执行一目了然
+- **Laya 决策模型**：底部导航「Laya 决策」页，加载 HTP context binary + tokenizer，对 state 文本做 choice/score/noul 三类决策（详见 [`docs/Laya-使用指南.md`](docs/Laya-使用指南.md)）
 
 ## 项目结构
 
@@ -29,7 +30,9 @@ QnnDemo/
 │       │   ├── MainActivity.kt            # 主界面
 │       │   ├── QnnNative.kt               # JNI 接口声明
 │       │   ├── InferenceEngine.kt         # 推理引擎封装
-│       │   └── Model.kt                   # 数据类（GraphInfo/TensorInfo/InferenceResult）
+│       │   ├── Model.kt                   # 数据类（GraphInfo/TensorInfo/InferenceResult）
+│       │   ├── laya/                       # Laya 决策模型（config/question/序列构建/后处理/编排/tokenizer）
+│       │   └── ui/LayaFragment.kt          # Laya 决策界面
 │       ├── res/layout/activity_main.xml   # UI 布局
 │       ├── res/values/strings.xml         # 字符串
 │       ├── assets/                         # DLC 模型（由 setup 脚本拷贝）
@@ -40,7 +43,9 @@ QnnDemo/
 │   ├── get_logcat.bat                     # logcat 抓取脚本
 │   ├── DLC转换指南.md                      # DLC 模型获取与转换详细指南
 │   ├── QNN模型产物转换指南.md               # DLC / SO / BIN 三种产物转换指南（CNN）
-│   └── LLM转QNN指南.md                     # LLM（如 Qwen2.5-3B）转 QNN Genie 格式指南
+│   ├── LLM转QNN指南.md                     # LLM（如 Qwen2.5-3B）转 QNN Genie 格式指南
+│   ├── Laya-使用指南.md                     # Laya 决策模型端到端使用指南
+│   └── setup_laya.sh                       # Laya 模型（laya.bin + tokenizer.json）推送脚本
 └── README.md
 ```
 
