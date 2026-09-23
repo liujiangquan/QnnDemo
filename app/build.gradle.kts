@@ -92,6 +92,13 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2")
     implementation("androidx.activity:activity-ktx:1.8.2")
 
+    // HuggingFace tokenizer（256k BPE）。注意：DJL 0.30.0 的 Maven jar 只带 linux/win/osx
+    // 原生库，NOT arm64-android —— APK 内缺 lib/arm64-v8a/libtokenizers.so，需另行交叉编译
+    // Rust tokenizers（aarch64-linux-android）放入 jniLibs/arm64-v8a/ 才能在真机运行。
+    implementation("ai.djl.huggingface:tokenizers:0.30.0")
+    // 单测协程支持
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
