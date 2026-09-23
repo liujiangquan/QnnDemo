@@ -30,13 +30,13 @@
 
 从 HF 检查点导出 ONNX，然后用 `onnxsim` 把动态维度**固定**成下列形状（HTP 图要求静态形状）：
 
-| 输入 | 形状 | dtype |
-|------|------|-------|
-| `input_ids` | `[1, 512]` | int32 |
-| `attention_mask` | `[1, 512]` | int32 |
-| `marker_pos` | `[1, 16]` | int32 |
-| `marker_mask` | `[1, 16]` | int32 |
-| `qtype` | `[1]` | int32 |
+| 输入 | 形状 | 原始 ONNX dtype | 转换后典型 dtype |
+|------|------|------|------|
+| `input_ids` | `[1, 512]` | int64 | int32/int64 |
+| `attention_mask` | `[1, 512]` | int64 | int32/int64 |
+| `marker_pos` | `[1, 16]` | int64 | int32/int64 |
+| `marker_mask` | `[1, 16]` | **bool** | uint8/int32 |
+| `qtype` | `[1]` | int64 | int32/int64 |
 
 ```bash
 python -m onnxsim laya.onnx laya_fixed.onnx \
@@ -44,6 +44,8 @@ python -m onnxsim laya.onnx laya_fixed.onnx \
   input_ids:1,512 attention_mask:1,512 marker_pos:1,16 marker_mask:1,16 qtype:1
 ```
 
+> **dtype 说明**：`qnn-onnx-converter` 会自行决定各输入的落地 dtype（int64 常被降为 int32，bool 常映射为 uint8）。**App 侧无需与某个固定 dtype 对齐**——`LayaBackend.decide` 在加载后读取图元信息里每个输入的 `elementBytes`，按图声明的实际字节宽度（1/2/4/8）小端打包（见 `LayaBackend.packIntsAs`）。因此上表「转换后 dtype」只要保持整型/布尔即可，具体值由转换工具决定，App 会自动适配。
+>
 > 输出名需为 `logits`（`[1,16]`）与 `act_logits`（`[1,2]`），App 侧按名字取回（见 `LayaBackend.decide`）。
 
 ### 1.2 ONNX → QNN 模型 C++/权重（fp16）
