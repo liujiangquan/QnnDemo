@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@+id/nav_backend" android:title="@string/nav_backend"
+        android:icon="@android:drawable/ic_menu_manage" />
+    <item android:id="@+id/nav_laya" android:title="@string/nav_laya"
+        android:icon="@android:drawable/ic_menu_help" />
+</menu>

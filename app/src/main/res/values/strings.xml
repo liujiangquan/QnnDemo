@@ -26,4 +26,8 @@
     <!-- 占位 -->
     <string name="placeholder_graph_info">加载 DLC 后将显示图与张量信息…</string>
     <string name="placeholder_log">运行日志将显示在此…</string>
+
+    <!-- 底部导航 -->
+    <string name="nav_backend">通用</string>
+    <string name="nav_laya">Laya</string>
 </resources>
