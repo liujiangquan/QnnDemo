@@ -87,6 +87,28 @@ class InferenceEngine(private val context: Context) : AutoCloseable {
             return@withContext loaded
         }
 
+    /** 加载预编译 context binary(.bin) */
+    suspend fun loadContextBinary(binPath: String, backend: QnnNative.Backend): Boolean =
+        withContext(Dispatchers.IO) {
+            if (!initialized) { Log.e(TAG, "请先调用 init()"); return@withContext false }
+            loaded = native.nativeLoadContextBinary(handle, binPath, backend.value)
+            if (loaded) {
+                graphInfos = GraphInfo.listFromJson(native.nativeGetGraphInfoJson(handle))
+                Log.i(TAG, "context binary 加载成功, 图数量=${graphInfos.size}, backend=$backend")
+            } else Log.e(TAG, "context binary 加载失败: $binPath")
+            return@withContext loaded
+        }
+
+    /**
+     * 执行推理并取回实际输出字节。[execute] 只返回尺寸。
+     * @return 每个输出张量字节数组；未加载或 native 报错返回 null
+     */
+    suspend fun executeWithOutput(graphName: String, inputs: List<ByteArray>): List<ByteArray>? =
+        withContext(Dispatchers.IO) {
+            if (!loaded) { Log.e(TAG, "executeWithOutput: 运行时未加载模型"); return@withContext null }
+            native.nativeExecuteWithOutput(handle, graphName, inputs.toTypedArray())?.toList()
+        }
+
     /** 执行推理 */
     suspend fun execute(graphName: String, inputs: List<ByteArray>): InferenceResult =
         withContext(Dispatchers.IO) {

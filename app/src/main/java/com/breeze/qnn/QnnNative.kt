@@ -48,4 +48,13 @@ class QnnNative {
      * @return 结果 JSON：{graphName, elapsedMs, error, outputs:[{size}]}
      */
     external fun nativeExecute(handle: Long, graphName: String, inputs: Array<ByteArray>): String
+
+    /** 加载预编译的 QNN context binary(.bin) 并构建运行时 */
+    external fun nativeLoadContextBinary(handle: Long, binPath: String, backend: Int): Boolean
+
+    /**
+     * 执行推理并取回实际输出字节（nativeExecute 只返回尺寸）。
+     * @return 每个输出张量的 ByteArray；失败返回 null
+     */
+    external fun nativeExecuteWithOutput(handle: Long, graphName: String, inputs: Array<ByteArray>): Array<ByteArray>?
 }
