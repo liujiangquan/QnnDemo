@@ -55,17 +55,21 @@ class LayaBackend(private val context: Context) : AutoCloseable {
     suspend fun decide(state: String, questions: LinkedHashMap<String, Question>): Map<String, Answer> {
         check(loaded) { "请先 load()" }
         val padId = tokenizer!!.tokenToId(LayaConfig.TOK_PAD).coerceAtLeast(0)
-        val order = engine.graphInfos.first().inputs.map { it.name }
+        val inputInfos = engine.graphInfos.first().inputs
+        val order = inputInfos.map { it.name }
+        // 名 -> 每元素字节宽度：按图声明的 dtype 打包（int32/int64/uint8/bool 等一律适配），缺失回退 4。
+        val widthOf = inputInfos.associate { it.name to it.elementBytes.toInt() }
+        fun w(name: String) = widthOf[name] ?: 4
         val out = LinkedHashMap<String, Answer>()
         for ((qid, q) in questions) {
             val built = seqBuilder.build(state, q)
             val k = built.markers.size
             val byName = mapOf(
-                "input_ids" to packInt32(built.ids, padId, LayaConfig.MAX_LEN),
-                "attention_mask" to packInt32Ones(built.ids.size, LayaConfig.MAX_LEN),
-                "marker_pos" to packInt32(built.markers, 0, LayaConfig.MAX_OPTS),
-                "marker_mask" to packMask(k, LayaConfig.MAX_OPTS),
-                "qtype" to packInt32(intArrayOf(q.qtype()), 0, 1),
+                "input_ids" to packIntsAs(built.ids, padId, LayaConfig.MAX_LEN, w("input_ids")),
+                "attention_mask" to packIntsAs(IntArray(built.ids.size) { 1 }, 0, LayaConfig.MAX_LEN, w("attention_mask")),
+                "marker_pos" to packIntsAs(built.markers, 0, LayaConfig.MAX_OPTS, w("marker_pos")),
+                "marker_mask" to packIntsAs(IntArray(k) { 1 }, 0, LayaConfig.MAX_OPTS, w("marker_mask")),
+                "qtype" to packIntsAs(intArrayOf(q.qtype()), 0, 1, w("qtype")),
             )
             val inputs = order.map { byName[it] ?: error("图输入名未知: $it") }
             val res = engine.executeWithOutput(graphName, inputs)
@@ -83,6 +87,22 @@ class LayaBackend(private val context: Context) : AutoCloseable {
 
     companion object {
         private const val TAG = "LayaBackend"
+
+        /** 把逻辑整数序列按目标张量的每元素字节宽度(1/2/4/8)小端打包，长度 count，不足用 pad 填充。 */
+        fun packIntsAs(values: IntArray, pad: Int, count: Int, elementBytes: Int): ByteArray {
+            val bb = java.nio.ByteBuffer.allocate(count * elementBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            for (i in 0 until count) {
+                val v = if (i < values.size) values[i] else pad
+                when (elementBytes) {
+                    1 -> bb.put(v.toByte())
+                    2 -> bb.putShort(v.toShort())
+                    4 -> bb.putInt(v)
+                    8 -> bb.putLong(v.toLong())
+                    else -> throw IllegalArgumentException("不支持的 elementBytes=$elementBytes")
+                }
+            }
+            return bb.array()
+        }
 
         fun packInt32(values: IntArray, pad: Int, size: Int): ByteArray {
             val bb = ByteBuffer.allocate(size * 4).order(ByteOrder.LITTLE_ENDIAN)
