@@ -22,6 +22,8 @@
 #include <string>
 #include <vector>
 
+#include "base_inference_runtime.h"
+
 namespace qnn_demo {
 
 // 后端类型（对应 QAIRT_System_BackendType_t 的枚举值）
@@ -61,25 +63,31 @@ struct InferenceResult {
     std::string error;
 };
 
-class QairtRuntime {
+class QairtRuntime : public BaseInferenceRuntime {
 public:
     QairtRuntime();
-    ~QairtRuntime();
+    ~QairtRuntime() override;
 
     QairtRuntime(const QairtRuntime&) = delete;
     QairtRuntime& operator=(const QairtRuntime&) = delete;
 
     // 初始化：dlopen libQairtSystem.so 并加载所需接口表
     // libSearchPath 为额外搜索路径（一般为 APP 的 nativeLibraryDir）
-    bool init(const std::string& libSearchPath = "");
+    bool init(const std::string& libSearchPath = "") override;
 
     // 加载 DLC 模型并构建运行时
     // dlcPath: DLC 文件绝对路径
     // backend: 后端类型
     bool loadDlc(const std::string& dlcPath, BackendType backend);
 
+    // 加载预编译的 context binary（qnn-context-binary-generator 产物）。
+    // 相比 loadDlc：图已 finalize，无需现场编译 —— 实测 NER 模型加载
+    // 6.6s → 0.9s、单次推理 52ms → 8ms、体积 388MB → 205MB（fp16 已烘进去）。
+    // 代价：context binary 与 SoC 绑死，只能在生成时的目标 SoC 上用。
+    bool loadContextBinary(const std::string& binPath, BackendType backend);
+
     // 释放运行时资源
-    void cleanup();
+    void cleanup() override;
 
     // 查询图信息
     const std::vector<GraphInfo>& graphInfos() const { return graphs_; }
@@ -93,9 +101,14 @@ public:
     // QAIRT 后端库构建版本号
     std::string backendBuildId() const { return backendBuildId_; }
 
-    bool isReady() const { return ready_; }
+    bool isReady() const override { return ready_; }
 
 private:
+    // loadDlc / loadContextBinary 共用的前置：清旧句柄 → dlopen 后端库 →
+    // backendCreate → deviceCreate（HTP 走 unsigned PD + socModel）。
+    // 不建 context，由调用者按 DLC / context-binary 两条路各自创建。
+    bool prepareBackend(BackendType backend);
+
     // PIMPL 风格：将 QAIRT 函数指针表与句柄隐藏到实现文件中
     struct Impl;
     Impl* impl_ = nullptr;
