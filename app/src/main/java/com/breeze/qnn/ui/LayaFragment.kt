@@ -25,11 +25,14 @@ class LayaFragment : Fragment() {
         b.spinnerQType.adapter = ArrayAdapter(requireContext(),
             android.R.layout.simple_spinner_dropdown_item, qtypes)
         b.btnLayaLoad.setOnClickListener {
-            lifecycleScope.launch {
+            viewLifecycleOwner.lifecycleScope.launch {
                 busy(true)
                 backend = LayaBackend(requireContext())
-                if (!backend!!.modelReady()) result("模型未就绪：请先运行 docs/setup_laya.sh 推送 laya.bin + tokenizer.json")
-                else result(if (backend!!.load()) "模型已加载 (HTP)" else "加载失败，见 logcat")
+                val msg = if (!backend!!.modelReady())
+                    "模型未就绪：请先运行 docs/setup_laya.sh 推送 laya.bin + tokenizer.json"
+                else if (backend!!.load()) "模型已加载 (HTP)" else "加载失败，见 logcat"
+                if (_b == null) return@launch
+                result(msg)
                 busy(false)
             }
         }
@@ -37,12 +40,14 @@ class LayaFragment : Fragment() {
             val be = backend
             if (be == null || !be.modelReady()) { result("请先加载模型"); return@setOnClickListener }
             val q = buildQuestion() ?: run { result("请填写问题与选项"); return@setOnClickListener }
-            lifecycleScope.launch {
+            viewLifecycleOwner.lifecycleScope.launch {
                 busy(true)
-                try {
+                val msg = try {
                     val ans = be.decide(b.editState.text.toString(), linkedMapOf("q" to q))["q"]
-                    result(render(ans))
-                } catch (e: Exception) { result("异常: ${e.message}") }
+                    render(ans)
+                } catch (e: Exception) { "异常: ${e.message}" }
+                if (_b == null) return@launch
+                result(msg)
                 busy(false)
             }
         }
