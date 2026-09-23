@@ -34,12 +34,18 @@ class LayaBackend(private val context: Context) : AutoCloseable {
         val g = engine.graphInfos.firstOrNull() ?: return false
         graphName = g.name
         val tk = LayaTokenizer(tokFile().toPath())
+        try {
+            val bos = tk.tokenToId(LayaConfig.TOK_BOS)
+            val eos = tk.tokenToId(LayaConfig.TOK_EOS)
+            val mask = tk.tokenToId(LayaConfig.TOK_MASK)
+            require(bos >= 0 && eos >= 0 && mask >= 0) { "特殊 token 解析失败: bos=$bos eos=$eos mask=$mask" }
+            seqBuilder = LayaSequenceBuilder(tk::encode, bos, eos, mask)
+        } catch (t: Throwable) {
+            // 关闭刚创建的 tokenizer，避免 DJL 原生句柄泄漏后再抛出
+            tk.close()
+            throw t
+        }
         tokenizer = tk
-        val bos = tk.tokenToId(LayaConfig.TOK_BOS)
-        val eos = tk.tokenToId(LayaConfig.TOK_EOS)
-        val mask = tk.tokenToId(LayaConfig.TOK_MASK)
-        require(bos >= 0 && eos >= 0 && mask >= 0) { "特殊 token 解析失败: bos=$bos eos=$eos mask=$mask" }
-        seqBuilder = LayaSequenceBuilder(tk::encode, bos, eos, mask)
         loaded = true
         Log.i(TAG, "Laya 加载成功 graph=$graphName inputs=${g.inputs.map { it.name to it.dataType }}")
         return true
