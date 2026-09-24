@@ -109,6 +109,14 @@ private:
     // 不建 context，由调用者按 DLC / context-binary 两条路各自创建。
     bool prepareBackend(BackendType backend);
 
+    // 设置 HTP 性能/电源模式（burst）。默认 DCVS 会让 DSP 主动降频，
+    // 同一张图实测在 268ms ↔ 620ms 之间漂移；设为 performance + 高压档后稳定在高频。
+    // 仅 HTP 后端调用；失败只告警不影响推理。
+    void applyHtpPerformanceMode();
+
+    // 释放 HTP powerConfigId（cleanup 时调用）
+    void releaseHtpPerformanceMode();
+
     // PIMPL 风格：将 QAIRT 函数指针表与句柄隐藏到实现文件中
     struct Impl;
     Impl* impl_ = nullptr;

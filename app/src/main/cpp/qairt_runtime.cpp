@@ -41,6 +41,7 @@
 #include "QNN/QnnTensor.h"
 #include "QNN/HTP/QnnHtpDevice.h"
 #include "QNN/HTP/QnnHtpDeviceConfigShared.h"
+#include "QNN/HTP/QnnHtpPerfInfrastructure.h"
 #include "QNN/System/QnnSystemInterface.h"
 #include "QNN/System/QnnSystemContext.h"
 
@@ -181,6 +182,11 @@ struct QairtRuntime::Impl {
     QnnSystemDlc_Handle_t dlcHandle = nullptr;
 
     BackendType currentBackend = BackendType::CPU;
+
+    // HTP 性能模式：createPowerConfigId 分配的句柄（0 表示未设置）
+    uint32_t htpPowerConfigId = 0;
+    bool htpPowerConfigValid = false;
+    QnnHtpDevice_PerfInfrastructure_t htpPerfInfra{};
 
     // 由 composeGraphs 返回，所有权属 sysIface（DLC 释放时一并释放）
     QnnSystemContext_GraphInfo_t* composedGraphs = nullptr;
@@ -337,6 +343,94 @@ bool QairtRuntime::init(const std::string& libSearchPath) {
 // ---------------------------------------------------------------------------
 // loadDlc：dlopen 后端 → 建 Log/Backend/Device/Context → DLC compose
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// HTP 性能模式（burst）
+//
+// 不���的话 DSP 跑在默认 DCVS 下会主动降频：同一张 laya_qnn 图实测在 268ms 与
+// 620ms 之间漂移（输入完全相同、概率逐位一致），纯粹是电压/频率档位在变。
+// 这里关掉 DCVS、把 bus/core 电压档钉在 TURBO，并把 sleep latency 压到最小。
+// ---------------------------------------------------------------------------
+void QairtRuntime::applyHtpPerformanceMode() {
+    if (!impl_ || !impl_->qnnIface) return;
+    auto& iface = impl_->qnnIface->QNN_INTERFACE_VER_NAME;
+    if (!iface.deviceGetInfrastructure) {
+        LOGW("HTP perf: 后端无 deviceGetInfrastructure，跳过性能模式设置");
+        return;
+    }
+
+    QnnDevice_Infrastructure_t devInfra = nullptr;
+    Qnn_ErrorHandle_t s = iface.deviceGetInfrastructure(&devInfra);
+    if (s != QNN_SUCCESS || !devInfra) {
+        LOGW("HTP perf: deviceGetInfrastructure 失败 0x%llx", (unsigned long long)s);
+        return;
+    }
+    auto* htpInfra = reinterpret_cast<QnnHtpDevice_Infrastructure_t*>(devInfra);
+    if (htpInfra->infraType != QNN_HTP_DEVICE_INFRASTRUCTURE_TYPE_PERF) {
+        LOGW("HTP perf: infraType=%d 非 PERF，跳过", (int)htpInfra->infraType);
+        return;
+    }
+    impl_->htpPerfInfra = htpInfra->perfInfra;
+    auto& perf = impl_->htpPerfInfra;
+    if (!perf.createPowerConfigId || !perf.setPowerConfig) {
+        LOGW("HTP perf: perfInfra 函数表不全，跳过");
+        return;
+    }
+
+    uint32_t cfgId = 0;
+    s = perf.createPowerConfigId(/*deviceId=*/0, /*coreId=*/0, &cfgId);
+    if (s != QNN_SUCCESS) {
+        LOGW("HTP perf: createPowerConfigId 失败 0x%llx", (unsigned long long)s);
+        return;
+    }
+    impl_->htpPowerConfigId = cfgId;
+    impl_->htpPowerConfigValid = true;
+
+    // DCVS 关掉 + 电压档钉在 TURBO + 最低睡眠延迟 = burst
+    QnnHtpPerfInfrastructure_PowerConfig_t dcvs = QNN_HTP_PERF_INFRASTRUCTURE_POWER_CONFIG_INIT;
+    dcvs.option = QNN_HTP_PERF_INFRASTRUCTURE_POWER_CONFIGOPTION_DCVS_V3;
+    auto& d = dcvs.dcvsV3Config;
+    d.contextId            = cfgId;
+    d.setDcvsEnable        = 1;
+    d.dcvsEnable           = 0;     // 关 DCVS：不让它动态降频
+    d.powerMode            = QNN_HTP_PERF_INFRASTRUCTURE_POWERMODE_PERFORMANCE_MODE;
+    d.setSleepLatency      = 1;
+    d.sleepLatency         = 40;    // us，越小唤醒越快
+    d.setBusParams         = 1;
+    d.busVoltageCornerMin    = DCVS_VOLTAGE_VCORNER_TURBO;
+    d.busVoltageCornerTarget = DCVS_VOLTAGE_VCORNER_TURBO;
+    d.busVoltageCornerMax    = DCVS_VOLTAGE_VCORNER_TURBO;
+    d.setCoreParams        = 1;
+    d.coreVoltageCornerMin    = DCVS_VOLTAGE_VCORNER_TURBO;
+    d.coreVoltageCornerTarget = DCVS_VOLTAGE_VCORNER_TURBO;
+    d.coreVoltageCornerMax    = DCVS_VOLTAGE_VCORNER_TURBO;
+
+    // RPC 控制延迟：降低 host↔DSP 往返开销
+    QnnHtpPerfInfrastructure_PowerConfig_t rpcLatency = QNN_HTP_PERF_INFRASTRUCTURE_POWER_CONFIG_INIT;
+    rpcLatency.option = QNN_HTP_PERF_INFRASTRUCTURE_POWER_CONFIGOPTION_RPC_CONTROL_LATENCY;
+    rpcLatency.rpcControlLatencyConfig = 100;   // us
+
+    const QnnHtpPerfInfrastructure_PowerConfig_t* cfgs[] = {&dcvs, &rpcLatency, nullptr};
+    s = perf.setPowerConfig(cfgId, cfgs);
+    if (s != QNN_SUCCESS) {
+        LOGW("HTP perf: setPowerConfig 失败 0x%llx（继续，性能可能受 DCVS 影响）",
+             (unsigned long long)s);
+        return;
+    }
+    LOGI("HTP perf: burst 模式已开启 (DCVS off, corner=TURBO, sleepLatency=40us, rpcLatency=100us)");
+}
+
+void QairtRuntime::releaseHtpPerformanceMode() {
+    if (!impl_ || !impl_->htpPowerConfigValid) return;
+    auto& perf = impl_->htpPerfInfra;
+    if (perf.destroyPowerConfigId) {
+        Qnn_ErrorHandle_t s = perf.destroyPowerConfigId(impl_->htpPowerConfigId);
+        if (s != QNN_SUCCESS)
+            LOGW("HTP perf: destroyPowerConfigId 失败 0x%llx", (unsigned long long)s);
+    }
+    impl_->htpPowerConfigValid = false;
+    impl_->htpPowerConfigId = 0;
+}
+
 bool QairtRuntime::prepareBackend(BackendType backend) {
     if (!ready_ || !impl_->sysIface) {
         LOGE("Runtime 未初始化，请先调用 init()");
@@ -460,6 +554,7 @@ bool QairtRuntime::prepareBackend(BackendType backend) {
                 return false;
             }
             LOGI("HTP Device 创建成功 socModel=%u signedPD=0", kSocModel8845);
+            applyHtpPerformanceMode();
         }
     } else {
         // CPU / GPU 直接建默认 device（可以 NULL）
@@ -871,6 +966,8 @@ InferenceResult QairtRuntime::execute(const std::string& graphName,
 
 // ---------------------------------------------------------------------------
 void QairtRuntime::cleanup() {
+    // 先释放 powerConfigId（此时 device/backend 句柄还在），再拆句柄
+    releaseHtpPerformanceMode();
     if (impl_) impl_->releaseAll();
     ready_ = false;
     graphs_.clear();
