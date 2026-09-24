@@ -1,11 +1,12 @@
 # Laya 决策模型 · 端到端使用指南
 
-本指南是把 **Laya 决策模型**从训练权重跑到 Android 真机 Demo 的**单一权威流程**。请按顺序阅读——尤其是「前置准备」里两件**本仓尚未完成、必须由你在自己环境完成**的事，否则真机运行会失败：
+本指南是把 **Laya 决策模型**从训练权重跑到 Android 真机 Demo 的**单一权威流程**。请按顺序阅读：
 
-1. **模型转换（T1）尚未执行**——需在 Windows 侧 QAIRT 2.48 环境转出 `laya.bin`（本开发机 WSL 无 `qnn-*` 工具链，见 §1）。
-2. **DJL tokenizer 缺 arm64-android 原生库**——`ai.djl.huggingface:tokenizers:0.30.0` 的 Maven jar 只带桌面（linux/win/osx）原生库，**不含 android/arm64 的 `libtokenizers.so`**，必须自行交叉编译放进 `jniLibs/`（见 §2），否则设备上加载 tokenizer 会崩。
+1. **模型转换（T1）已完成** —— `laya.bin` 已转出（654 MB，HTP V81 fp16，build ID `v2.48.40.260702151143`，图名 `laya_qnn`）。完整流水线、踩坑与复现命令见 **`docs/convert_laya.md`**（§1 只留结论）。**并已把 `jniLibs` 的 HTP 一套统一到 SDK 2.48**，使 ctx binary 的 build ID 与设备端 skel 匹配。
+2. **DJL tokenizer 缺 arm64-android 原生库** —— `ai.djl.huggingface:tokenizers:0.30.0` 的 Maven jar 只带桌面（linux/win/osx）原生库，**不含 android/arm64 的 `libtokenizers.so`**，必须自行交叉编译放进 `jniLibs/`（见 §2），否则设备上加载 tokenizer 会崩。**这一件仍未完成。**
+3. **输出是 fp16** —— ctx binary 的 `logits` / `act_logits` 是 `FLOAT_16`（2 字节），而 `LayaBackend.toFloats()` 目前按 4 字节读，会解出错误数值。**这一件仍未完成**，见 §1.1 与 `convert_laya.md` §7。
 
-> 已完成的部分：Kotlin 决策链路（序列构建 / 后处理 / 编排 / UI）、JNI context-binary 加载与取回、推送脚本、真机 E2E 用例。构建/测试状态见 §7。
+> 已完成：模型转换（T1）、jniLibs HTP 栈统一到 SDK 2.48、Kotlin 决策链路（序列构建 / 后处理 / 编排 / UI）、JNI context-binary 加载与取回、推送脚本、真机 E2E 用例。构建/测试状态见 §7。
 
 ---
 
@@ -22,77 +23,48 @@
 
 ---
 
-## 1. 模型转换 → `laya.bin`（在 Windows QAIRT 2.48 环境执行）
+## 1. 模型转换 → `laya.bin`（已完成）
 
-> 本仓的 WSL 开发机**没有** `qnn-onnx-converter` / `qnn-model-lib-generator` / `qnn-context-binary-generator`。以下命令请在装有 **QAIRT SDK 2.48** 的 Windows（或 Linux x86）主机上跑。产物 `laya.bin` 约 **640MB**（HTP fp16）。
+**完整流水线、踩坑与复现命令见 `docs/convert_laya.md`**，本节只留结论。
 
-### 1.1 导出并固定形状的 ONNX
+> 工具链在 **WSL**（Ubuntu-22.04 + QAIRT **2.48.40.260702**）里跑，**不要在 Windows 上跑**——Windows 版 QAIRT 的 Python 链缺 DLL，`qnn-onnx-converter` 之类都是 `#!/usr/bin/env python3` 脚本，没有原生 exe。
+> 目标：HTP **V81** / `soc_id=soc_model=97` / **unsigned PD** / fp16。
+> 产物：`D:\workspace\models\laya\out\laya.bin`，**654,363,400 字节**，build ID `v2.48.40.260702151143`，
+> **图名是 `laya_qnn`**（由输入 ONNX 文件名生成，**不是** `laya`）。
 
-从 HF 检查点导出 ONNX，然后用 `onnxsim` 把动态维度**固定**成下列形状（HTP 图要求静态形状）：
+### 1.1 实际 IO 契约（从 ctx binary 读出）
 
-| 输入 | 形状 | 原始 ONNX dtype | 转换后典型 dtype |
-|------|------|------|------|
-| `input_ids` | `[1, 512]` | int64 | int32/int64 |
-| `attention_mask` | `[1, 512]` | int64 | int32/int64 |
-| `marker_pos` | `[1, 16]` | int64 | int32/int64 |
-| `marker_mask` | `[1, 16]` | **bool** | uint8/int32 |
-| `qtype` | `[1]` | int64 | int32/int64 |
+由 `qnn-context-binary-utility` 从 `laya.bin` 导出（命令见 `convert_laya.md` §5.4）：
 
-```bash
-python -m onnxsim laya.onnx laya_fixed.onnx \
-  --overwrite-input-shape \
-  input_ids:1,512 attention_mask:1,512 marker_pos:1,16 marker_mask:1,16 qtype:1
-```
+| 张量 | 方向 | dtype | 形状 |
+|------|------|-------|------|
+| `input_ids` | 输入 | INT_32 | `[1,512]` |
+| `attention_mask` | 输入 | INT_32 | `[1,512]` |
+| `marker_pos` | 输入 | INT_32 | `[1,16]` |
+| `marker_mask` | 输入 | **BOOL_8** | `[1,16]` |
+| `qtype` | 输入 | INT_32 | `[1]` |
+| `logits` | 输出 | **FLOAT_16** | `[1,16]` |
+| `act_logits` | 输出 | **FLOAT_16** | `[1,2]` |
 
-> **dtype 说明**：`qnn-onnx-converter` 会自行决定各输入的落地 dtype（int64 常被降为 int32，bool 常映射为 uint8）。**App 侧无需与某个固定 dtype 对齐**——`LayaBackend.decide` 在加载后读取图元信息里每个输入的 `elementBytes`，按图声明的实际字节宽度（1/2/4/8）小端打包（见 `LayaBackend.packIntsAs`）。因此上表「转换后 dtype」只要保持整型/布尔即可，具体值由转换工具决定，App 会自动适配。
+> **输入侧 ✓**：`LayaBackend.packIntsAs` 在加载后读图元信息里每个输入的 `elementBytes`，按图声明的实际字节宽度（INT_32→4、BOOL_8→1）小端打包，**无需与某个固定 dtype 对齐**。
 >
-> 输出名需为 `logits`（`[1,16]`）与 `act_logits`（`[1,2]`），App 侧按名字取回（见 `LayaBackend.decide`）。
+> **输出侧 ⚠️ 待修**：`logits` / `act_logits` 是 **fp16（2 字节）**，而 `LayaBackend.toFloats()` 目前按 4 字节读（`bb.float`）→ 会解出错误数值。
+> 修法：按输出张量的 `elementBytes` 分派 fp16 / fp32 解码。详见 `convert_laya.md` §7。
+>
+> 输出名保持 `logits`（`[1,16]`）与 `act_logits`（`[1,2]`），App 侧按名字取回（见 `LayaBackend.decide`）。
 
-### 1.2 ONNX → QNN 模型 C++/权重（fp16）
+### 1.2 转换要点（完整命令见 `convert_laya.md` §5 / §8）
 
-```bash
-qnn-onnx-converter \
-  --input_network laya_fixed.onnx \
-  --float_bitwidth 16 \
-  --output_path laya.cpp
-```
+- **model lib 用 `-t x86_64-linux-clang`，不是 `aarch64-android`。** ctx-gen 是 **host 进程**，它 `dlopen` 的 model lib 必须是 host 架构；`aarch64-android` 那条路还要 Android NDK 的 `ndk-build`（本机只有 Windows NDK，WSL 里没有），而且那是「在设备端跑 ctx-gen」的路线。**本流程是离线 host prepare，完全不需要 NDK。**
+- **ctx-gen 的 `--config_file` 只接受 `backend_extensions` 块** —— `graphs` / `devices` 必须放到被它指向的**第二份** config 里（外层套内层）。直接写在 `--config_file` 里会 `Unknown Key` → Device Creation failure。
+- **`graph_names` 必须写 `laya_qnn`**，写 `laya` 会找不到图。
+- **不要用 `C:\Qualcomm\AIStack\QAIRT\2.49.40.260810`**：生成出来 build ID 会是 v2.49，与 jniLibs 里的 2.48 库不符 → `contextCreateFromBinary` 报 `0x1388`。
 
-### 1.3 编译成 aarch64-android 模型库
-
-```bash
-qnn-model-lib-generator \
-  -c laya.cpp -b laya.bin.raw \
-  -t aarch64-android \
-  -o model_libs
-# 产出 model_libs/aarch64-android/liblaya.so
-```
-
-### 1.4 生成 HTP context binary（V81，unsigned PD）
-
-```bash
-qnn-context-binary-generator \
-  --model model_libs/aarch64-android/liblaya.so \
-  --backend libQnnHtp.so \
-  --binary_file laya \
-  --output_dir out \
-  --config_file htp_config.json
-# 产出 out/laya.bin（≈640MB）
-```
-
-`htp_config.json`（关键项）：目标 **HTP V81**、**unsigned PD**（与本仓 `jniLibs/arm64-v8a/libQnnHtpV81Stub.so` 匹配的 8845 / SD 8 Elite 一档）：
-
-```json
-{
-  "graphs": [{ "graph_names": ["laya"], "fp16_relaxed_precision": 1 }],
-  "devices": [{
-    "dsp_arch": "v81",
-    "soc_model": "SM8845",
-    "pd_session": "unsigned"
-  }]
-}
-```
-
-> **回退方案**：若 HF 直接导出的 ONNX 图不干净（含 converter 不支持的算子 / 动态控制流），用 `receptron/laya` 仓的 `export_onnx.py` 从 HF 检查点**重新导出干净图**，再回到 §1.1。
+> **已处理的图问题**：HF 导出的 ONNX 里有**唯一一个 bool `Gather`**（HTP 的 Gather 只吃整型 activation，会报 `0x c26`/`3110`）。
+> 实测其 index 是 `arange(512)`、元素顺序恒等，等价于 Reshape，已用最小手术删除并验证 logits/act_logits **逐位一致**。
+> 注意：**不需要**为图中残留的 `IsNaN`×22 / `Where`×26 / `TopK` / `Erf` 改图 —— HTP 支持 fp16 下的它们
+> （`htp_opdef_version_history.html`：`IsNan enabled on FP16`、`Gather (Activation type: FP16)`）。
+> 若将来又冒出 HTP 不支持的算子，再考虑整图重导出（见 `convert_laya.md` §3.5）。
 
 ---
 
@@ -219,15 +191,22 @@ docs/setup_laya.sh <laya.bin 路径> <tokenizer.json 路径> [applicationId]
 
 ## 7. 当前构建 / 测试状态（如实）
 
-- **JVM 单测全绿**：`LayaSequenceBuilderTest` / `LayaPostprocessorTest` / `LayaPackTest`（共 12 个用例）+ 示例单测，`:app:testDebugUnitTest` 通过。
-- **`:app:assembleDebug` 可构建**（APK 产出）。
-- **真机 E2E**：`LayaE2ETest` 已写好并可编译，**待设备 + 模型部署（§1–§3）后运行**。运行参考 `docs/run_e2e_tests.sh`。
+- **模型转换（T1）已完成**：`laya.bin` 654 MB、build ID `v2.48.40.260702151143`、图名 `laya_qnn`。流水线见 `docs/convert_laya.md`。
+- **jniLibs 的 HTP 一套已统一到 SDK 2.48**（`libQnnHtp.so` / `libQnnHtpV81Stub.so` / `libQnnHtpPrepare.so` / `libQnnHtpV81Skel.so` unsigned / `V81CalculatorStub` / `NetRunExtensions`），使 ctx binary 的 build ID 与设备端 skel 匹配（否则 `0x1388`）。
+- **JVM 单测全绿**：`LayaSequenceBuilderTest` / `LayaPostprocessorTest` / `LayaPackTest`（共 12 个用例）+ 示例单测。
+- **`:app:assembleDebug` 通过**，APK 内已含上述 2.48 HTP 全套库（已核验）。
+- **仍未完成 —— 上真机前必须先解决**：
+  1. **arm64-android 的 `libtokenizers.so`**（§2）。APK 里目前只有桌面版 `native/*/libtokenizers.*`，**没有** `lib/arm64-v8a/libtokenizers.so`，真机加载 tokenizer 会失败。
+  2. **`logits` / `act_logits` 的 fp16 解码**（§1.1）。`LayaBackend.toFloats` 按 4 字节读，而图输出是 `FLOAT_16`（2 字节），会解出错误数值。
+- **真机 E2E**：`LayaE2ETest` 已写好并可编译，**待上述两项 + 设备/模型部署（§1–§3）后运行**。运行参考 `docs/run_e2e_tests.sh`。
 
-验证命令：
+验证命令（在 Git Bash 或 WSL 里跑）：
 
-```bat
-cmd.exe /c "cd /d D:\workspace\AICode\qnn\QnnDemo && gradlew.bat :app:testDebugUnitTest :app:assembleDebug"
+```bash
+./gradlew :app:testDebugUnitTest :app:assembleDebug
 ```
+
+> 注意：`cmd.exe /c "... && gradlew.bat ..."` 从 Git Bash 里调用时，`/c`、`/d` 会被 MSYS 当成路径改写，导致命令静默不执行。要么加 `MSYS_NO_PATHCONV=1`，要么直接用上面的 `./gradlew`。
 
 ---
 
