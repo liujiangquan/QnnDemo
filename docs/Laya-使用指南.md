@@ -3,10 +3,10 @@
 本指南是把 **Laya 决策模型**从训练权重跑到 Android 真机 Demo 的**单一权威流程**。请按顺序阅读：
 
 1. **模型转换（T1）已完成** —— `laya.bin` 已转出（654 MB，HTP V81 fp16，build ID `v2.48.40.260702151143`，图名 `laya_qnn`）。完整流水线、踩坑与复现命令见 **`docs/convert_laya.md`**（§1 只留结论）。**并已把 `jniLibs` 的 HTP 一套统一到 SDK 2.48**，使 ctx binary 的 build ID 与设备端 skel 匹配。
-2. **DJL tokenizer 缺 arm64-android 原生库** —— `ai.djl.huggingface:tokenizers:0.30.0` 的 Maven jar 只带桌面（linux/win/osx）原生库，**不含 android/arm64 的 `libtokenizers.so`**，必须自行交叉编译放进 `jniLibs/`（见 §2），否则设备上加载 tokenizer 会崩。**这一件仍未完成。**
-3. **输出是 fp16** —— ctx binary 的 `logits` / `act_logits` 是 `FLOAT_16`（2 字节），而 `LayaBackend.toFloats()` 目前按 4 字节读，会解出错误数值。**这一件仍未完成**，见 §1.1 与 `convert_laya.md` §7。
+2. **tokenizer 原生库（arm64-android）已完成** —— 不再用 DJL（其 jar 不带 arm64-android 原生库）。改为自建 JNI shim：`native/tokenizers-jni`（Rust `tokenizers` 0.20.4 + `onig`）交叉编译出 `libtokenizers_jni.so`（ELF64/AArch64，仅依赖 `libc`/`libdl`，2.95 MB），已放入 `jniLibs/arm64-v8a/` 并打进 APK。`LayaTokenizer` 通过它加载 `tokenizer.json`。复现见 §2。
+3. **输出 fp16 已修正** —— ctx binary 的 `logits` / `act_logits` 是 `FLOAT_16`（2 字节）；`LayaBackend` 现按输出张量 `elementBytes` 走 `toFloatsAuto`（`halfToFloat` 解 fp16 / fp32 自适应）。见 §1.1。
 
-> 已完成：模型转换（T1）、jniLibs HTP 栈统一到 SDK 2.48、Kotlin 决策链路（序列构建 / 后处理 / 编排 / UI）、JNI context-binary 加载与取回、推送脚本、真机 E2E 用例。构建/测试状态见 §7。
+> 已完成：模型转换（T1）、jniLibs HTP 栈统一到 SDK 2.48、**arm64 tokenizer 原生库（`libtokenizers_jni.so`）**、**fp16 输出解码修正**、Kotlin 决策链路（序列构建 / 后处理 / 编排 / UI）、JNI context-binary 加载与取回、推送脚本、真机 E2E 用例。**剩余仅：在真机 8845 上 `setup_laya.sh` 推模型后跑通验证。** 构建/测试状态见 §7。
 
 ---
 
@@ -68,35 +68,26 @@
 
 ---
 
-## 2. 交叉编译 arm64-android 的 `libtokenizers.so`（关键前置）
+## 2. tokenizer 原生库 `libtokenizers_jni.so`（已完成，含复现）
 
-**为什么必须做**：Kotlin 侧用 DJL 的 `HuggingFaceTokenizer` 加载 `tokenizer.json`（见 `LayaTokenizer.kt`）。DJL 底层是 HuggingFace 的 **Rust `tokenizers`** crate，靠 JNI 调 native。`ai.djl.huggingface:tokenizers:0.30.0` 的 jar **只打包了 linux/win/osx 的原生库**，APK 里**没有** `lib/arm64-v8a/libtokenizers.so`——在真机加载 tokenizer 时会因找不到原生库而失败。`app/build.gradle.kts` 的依赖处也标注了这一点。
+**背景**：`LayaTokenizer` 需要 HuggingFace `tokenizers` 加载 `tokenizer.json`。原计划用 DJL，但 `ai.djl.huggingface:tokenizers:0.30.0` 的 jar **只带桌面原生库**，且其 native 是 DJL 私有 JNI（符号 `Java_ai_djl_...`），直接编 `huggingface/tokenizers` 也对不上。故**弃用 DJL**，自建一个薄 JNI shim：
 
-**做法**：为 `aarch64-linux-android` 交叉编译 HuggingFace `tokenizers` 的 C-API / JNI，产出 `libtokenizers.so`，放到 `app/src/main/jniLibs/arm64-v8a/`。
+- **crate**：`native/tokenizers-jni/`（`Cargo.toml` + `src/lib.rs`），依赖 crates.io `tokenizers = 0.20.4`（`onig` 后端），导出 4 个 JNI 符号 `Java_com_breeze_qnn_laya_LayaTokenizer_native{New,Encode,TokenToId,Free}`。
+- **Kotlin**：`LayaTokenizer` 用 `System.loadLibrary("tokenizers_jni")` + `external` 调用；公开接口（`encode`/`tokenToId`/`close`）不变，`LayaBackend` 无需改动。
+- **产物**：`libtokenizers_jni.so`（ELF64/AArch64，静态链入 oniguruma，仅 `NEEDED libc/libdl`，2.95 MB），已提交到 `app/src/main/jniLibs/arm64-v8a/`，随 APK 打包。
+
+**复现（需一份 Linux NDK r26+ 与主机 libclang）**：
 
 ```bash
-# 1) 装 Rust + Android target
-rustup target add aarch64-linux-android
-
-# 2) 配置 NDK 交叉编译器（NDK r25c+）
-export ANDROID_NDK_HOME=/path/to/ndk/25.2.9519653
-TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64
-export CC_aarch64_linux_android=$TOOLCHAIN/bin/aarch64-linux-android34-clang
-export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TOOLCHAIN/bin/aarch64-linux-android34-clang
-
-# 3) 取与 DJL 0.30.0 对应版本的 tokenizers 源码，编译 JNI 动态库
-#    （DJL 的 native 封装在 huggingface/tokenizers 的 bindings，或 djl 的 tokenizers-jni 子项目）
-git clone https://github.com/huggingface/tokenizers && cd tokenizers/bindings/... # 对应 JNI/C-API 子目录
-cargo build --release --target aarch64-linux-android
-
-# 4) 产物拷入 jniLibs
-cp target/aarch64-linux-android/release/libtokenizers.so \
-   <repo>/app/src/main/jniLibs/arm64-v8a/libtokenizers.so
+# 前置：rustup target add aarch64-linux-android；apt install libclang-dev（bindgen 用）
+# 一份 Linux 版 NDK（SDK 里的 windows-x86_64 NDK 在 WSL 用不了）：
+#   curl -fL -o ndk.zip https://dl.google.com/android/repository/android-ndk-r26d-linux.zip && unzip ndk.zip -d ~/ndk
+NDK_HOME=~/ndk/android-ndk-r26d ./native/tokenizers-jni/build-android.sh
+# 脚本会设置 CC/AR/linker + bindgen 的 sysroot，编译并把 .so 拷进 jniLibs/arm64-v8a/
 ```
 
-> 版本务必与 `tokenizers:0.30.0` 内嵌的 Rust 库版本一致，避免 JNI 符号不匹配。若你能找到**可用的第三方 Android 构建**（已针对 `arm64-v8a` 编好的 `libtokenizers.so`），直接放进 `jniLibs/arm64-v8a/` 亦可。
->
-> 校验：`ls app/src/main/jniLibs/arm64-v8a/libtokenizers.so` 存在；打出的 APK 内 `lib/arm64-v8a/` 含该 `.so`。
+> 校验：`ls app/src/main/jniLibs/arm64-v8a/libtokenizers_jni.so`；APK 内含 `lib/arm64-v8a/libtokenizers_jni.so`（已确认）。
+> 若换 tokenizers 版本，注意 0.20.4 仍强依赖 `onig`（纯 Rust 需更高版本才移除该依赖）。
 
 ---
 

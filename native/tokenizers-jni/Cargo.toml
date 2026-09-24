@@ -1,0 +1,21 @@
+[package]
+name = "tokenizers-jni"
+version = "0.1.0"
+edition = "2021"
+description = "Thin JNI shim over the HuggingFace tokenizers crate for com.breeze.qnn.laya.LayaTokenizer (Android arm64)."
+
+[lib]
+crate-type = ["cdylib"]
+name = "tokenizers_jni"
+
+[dependencies]
+jni = "0.21"
+# Pin a stable tokenizers release (loads the same tokenizer.json as the v1.0-dev checkout,
+# but with a settled API). 0.20.4 still requires the onig regex backend, so we enable it and
+# cross-compile oniguruma from source via the NDK C toolchain (bindgen uses host libclang).
+tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
