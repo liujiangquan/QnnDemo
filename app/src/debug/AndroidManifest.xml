@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自插桩（self-instrumenting）用：把 instrumentation 声明进 debug 主 APK 自身，
+  targetPackage 指向自己。这样无需安装独立 test APK（本机 no_install_apps 限制会拒装）。
+  运行：am instrument -w -e class com.breeze.qnn.LayaE2ETest \
+        com.breeze.qnn/androidx.test.runner.AndroidJUnitRunner
+  仅 debug 生效，不影响 release。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <instrumentation
+        android:name="androidx.test.runner.AndroidJUnitRunner"
+        android:targetPackage="com.breeze.qnn"
+        android:label="Laya on-device tests" />
+</manifest>

@@ -80,6 +80,38 @@ android {
     }
 }
 
+// ============================================================
+// androidTest APK 统签
+//
+// 统签插件只 hook packageDebug/packageRelease，不覆盖 packageDebugAndroidTest。
+// 本机是「只允许平台签名 APK 安装」的设备：test APK 用默认调试 key 会 INSTALL_FAILED_USER_RESTRICTED。
+// 这里在 packageDebugAndroidTest 后调用统签插件内部 runner，用平台 key 重签 test APK。
+// ============================================================
+afterEvaluate {
+    tasks.named("packageDebugAndroidTest").configure {
+        doLast {
+            try {
+                val runnerClass = Class.forName(
+                    "com.stepos.unifiedsigning.gradle.UnifiedApksigInProcessRunner"
+                )
+                val instance = runnerClass.getField("INSTANCE").get(null)
+                val method = runnerClass.getMethod(
+                    "runPackagedVariantIfApplicable",
+                    org.gradle.api.Project::class.java,
+                    org.gradle.api.logging.Logger::class.java,
+                    String::class.java
+                )
+                // 统签插件按 variant 名寻找 outputs/apk/<subdir>/ 下的 APK。
+                // androidTest 的子目录是 "androidTest/debug"
+                method.invoke(instance, project, logger, "androidTest/debug")
+            } catch (e: Exception) {
+                logger.warn("unifiedSigning: [androidTest] re-sign failed: ${e.message}")
+                logger.warn("unifiedSigning: [androidTest] 如果需要跑 connectedDebugAndroidTest，请手动用 apksigner 重签 test APK")
+            }
+        }
+    }
+}
+
 dependencies {
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.core.ktx)
@@ -101,4 +133,9 @@ dependencies {
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
+
+    // 自插桩：debug 主 APK 需内含 JUnit4 + AndroidX test runner，才能把 androidTest 源码编进去并被 am instrument 调起
+    debugImplementation("androidx.test:runner:1.5.2")
+    debugImplementation("androidx.test.ext:junit:1.1.5")
+    debugImplementation("junit:junit:4.13.2")
 }
