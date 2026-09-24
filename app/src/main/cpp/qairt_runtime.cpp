@@ -4,16 +4,19 @@
 // QNN Direct API 的运行时实现（类名沿用 QairtRuntime 以避免 JNI 破坏）。
 //
 // 关键设计：绕开 QAIRT 上层，直接用 libQnnSystem.so + libQnnCpu/libQnnHtp.so
-// 的稳定 QNN Core API。原因：vendor firmware 提供的是 QNN 2.46，签名 skel 也
-// 是 2.46；而 QAIRT 2.48 上层跟 QNN 2.46 底层 FastRPC 协议对不上，会在
-// DspTransport.openSession 时报 AEE_ENOSUCHMOD (0x80000406)。
+// 的稳定 QNN Core API。原因：QAIRT 2.48 上层跟 vendor QNN 2.46 底层 FastRPC
+// 协议对不上，会在 DspTransport.openSession 时报 AEE_ENOSUCHMOD (0x80000406)。
 //
-// 库分工（见 jniLibs/arm64-v8a/）：
+// 库分工（见 jniLibs/arm64-v8a/，HTP 一套统一为 SDK 2.48）：
 //   - libQnnSystem.so     (SDK 2.48)  纯 host，含 DLC 解析 + composeGraphs
 //   - libQnnCpu.so        (SDK 2.48)  CPU 后端，vendor 不提供
-//   - libQnnHtp.so        (vendor 2.46) HTP 后端，跟 vendor skel 匹配
-//   - libQnnHtpV81Stub.so (vendor 2.46) FastRPC stub
-//   - libQnnHtpPrepare.so (vendor 2.46) 图编译依赖
+//   - libQnnHtp.so        (SDK 2.48)  HTP 后端
+//   - libQnnHtpV81Stub.so (SDK 2.48)  FastRPC stub
+//   - libQnnHtpPrepare.so (SDK 2.48)  图编译依赖
+//   - libQnnHtpV81Skel.so (SDK 2.48, unsigned)  DSP 侧 skel，走 unsigned PD
+//
+// 约束：ctx binary 必须由同一 SDK 生成（build ID 相符），否则
+// contextCreateFromBinary 报 0x1388 "newer binary on old SDK"。见 docs/convert_laya.md。
 // =============================================================================
 
 #include "qairt_runtime.h"
