@@ -38,4 +38,6 @@
     <string name="laya_ins_hint">问题（instructions），如：该工单应由哪个团队处理？</string>
     <string name="laya_opts_hint">choice/score 每行一个选项；noul 可留空</string>
     <string name="laya_decide">决策</string>
+    <string name="laya_sample_label">预置测试样例</string>
+    <string name="laya_sample_custom">自定义（手动输入）</string>
 </resources>

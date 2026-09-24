@@ -6,6 +6,16 @@
     <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
         android:text="@string/laya_title" android:textSize="20sp" android:textStyle="bold" android:paddingBottom="8dp"/>
     <Button android:id="@+id/btnLayaLoad" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/laya_load"/>
+
+    <!-- 预置测试样例：选择后自动填入下方输入框，并在预览区展示完整输入数据 -->
+    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:text="@string/laya_sample_label" android:textStyle="bold" android:paddingTop="12dp"/>
+    <Spinner android:id="@+id/spinnerSample" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+    <TextView android:id="@+id/textSampleInput" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:paddingTop="4dp" android:paddingBottom="8dp" android:textSize="12sp"
+        android:fontFamily="monospace" android:textIsSelectable="true"
+        android:background="?android:attr/selectableItemBackground"/>
+
     <EditText android:id="@+id/editState" android:layout_width="match_parent" android:layout_height="wrap_content"
         android:hint="@string/laya_state_hint" android:minLines="3" android:gravity="top" android:inputType="textMultiLine"/>
     <Spinner android:id="@+id/spinnerQType" android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingTop="8dp"/>
