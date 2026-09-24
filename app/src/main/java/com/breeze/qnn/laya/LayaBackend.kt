@@ -74,10 +74,13 @@ class LayaBackend(private val context: Context) : AutoCloseable {
             val inputs = order.map { byName[it] ?: error("图输入名未知: $it") }
             val res = engine.executeWithOutput(graphName, inputs)
                 ?: run { Log.e(TAG, "推理失败: $qid"); continue }
-            val outNames = engine.graphInfos.first().outputs.map { it.name }
-            val logits = toFloats(res[outNames.indexOf("logits").coerceAtLeast(0)])
+            val outInfos = engine.graphInfos.first().outputs
+            val outNames = outInfos.map { it.name }
+            // 按输出张量声明宽度解码：fp16(2B)/fp32(4B) 自适应，缺失回退 4。
+            val logIdx = outNames.indexOf("logits").coerceAtLeast(0)
+            val logits = toFloatsAuto(res[logIdx], outInfos[logIdx].elementBytes.toInt())
             val actIdx = outNames.indexOf("act_logits").let { if (it >= 0) it else 1 }
-            val act = toFloats(res[actIdx])
+            val act = toFloatsAuto(res[actIdx], outInfos[actIdx].elementBytes.toInt())
             out[qid] = LayaPostprocessor.decode(q, logits, k, act)
         }
         return out
@@ -120,6 +123,39 @@ class LayaBackend(private val context: Context) : AutoCloseable {
         fun toFloats(bytes: ByteArray): FloatArray {
             val bb = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
             return FloatArray(bytes.size / 4) { bb.float }
+        }
+
+        /** IEEE-754 binary16 -> Float。纯位运算，JVM/Android 通用。 */
+        fun halfToFloat(h: Int): Float {
+            val s = (h ushr 15) and 0x1
+            val e = (h ushr 10) and 0x1f
+            val m = h and 0x3ff
+            val bits: Int = when (e) {
+                0 -> if (m == 0) s shl 31 else {            // 0 或 subnormal
+                    // 规格化：把隐含位左移进 bit10，指数相应减小
+                    var mant = m
+                    var exp = -1
+                    do { mant = mant shl 1; exp++ } while (mant and 0x400 == 0)
+                    mant = mant and 0x3ff
+                    (s shl 31) or ((127 - 15 - exp) shl 23) or (mant shl 13)
+                }
+                0x1f -> (s shl 31) or (0xff shl 23) or (m shl 13)   // Inf/NaN
+                else -> (s shl 31) or ((e + (127 - 15)) shl 23) or (m shl 13)   // normal
+            }
+            return Float.fromBits(bits)
+        }
+
+        /**
+         * 按输出张量声明的每元素字节宽度解码为 FloatArray。
+         * elementBytes==2 -> 小端 binary16 (fp16)；==4 -> 小端 fp32；其它抛异常。
+         */
+        fun toFloatsAuto(bytes: ByteArray, elementBytes: Int): FloatArray = when (elementBytes) {
+            2 -> {
+                val bb = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+                FloatArray(bytes.size / 2) { halfToFloat(bb.short.toInt() and 0xFFFF) }
+            }
+            4 -> toFloats(bytes)
+            else -> throw IllegalArgumentException("不支持的输出 elementBytes=$elementBytes")
         }
     }
 }

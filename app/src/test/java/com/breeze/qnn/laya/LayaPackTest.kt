@@ -47,4 +47,30 @@ class LayaPackTest {
         val b = LayaBackend.packInt32(v, pad = 7, size = 6)
         assertEquals(b.toList(), a.toList())
     }
+
+    @Test fun `halfToFloat 已知 binary16 值`() {
+        assertEquals(0.0f, LayaBackend.halfToFloat(0x0000), 0.0f)
+        assertEquals(1.0f, LayaBackend.halfToFloat(0x3C00), 0.0f)
+        assertEquals(2.0f, LayaBackend.halfToFloat(0x4000), 0.0f)
+        assertEquals(-2.0f, LayaBackend.halfToFloat(0xC000), 0.0f)
+        assertEquals(0.333f, LayaBackend.halfToFloat(0x3555), 1e-3f)
+        assertEquals(Float.POSITIVE_INFINITY, LayaBackend.halfToFloat(0x7C00), 0.0f)
+    }
+
+    @Test fun `toFloatsAuto 宽度 2 解码小端 fp16`() {
+        // 小端 halves: 0x3C00 (1.0), 0x4000 (2.0)
+        val got = LayaBackend.toFloatsAuto(byteArrayOf(0x00, 0x3C, 0x00, 0x40), 2)
+        assertEquals(2, got.size)
+        assertEquals(1.0f, got[0], 0.0f)
+        assertEquals(2.0f, got[1], 0.0f)
+    }
+
+    @Test fun `toFloatsAuto 宽度 4 等价 toFloats`() {
+        val bb = ByteBuffer.allocate(3 * 4).order(ByteOrder.LITTLE_ENDIAN)
+        bb.putFloat(1.5f); bb.putFloat(-3.25f); bb.putFloat(42.0f)
+        val bytes = bb.array()
+        val auto = LayaBackend.toFloatsAuto(bytes, 4)
+        val old = LayaBackend.toFloats(bytes)
+        assertEquals(old.toList(), auto.toList())
+    }
 }
