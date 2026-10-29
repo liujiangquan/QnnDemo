@@ -25,13 +25,11 @@
             android:name="libcdsprpc.so"
             android:required="false" />
 
-        <!-- QNN V81 vendor 库白名单（8845 的 Hexagon 是 V81）
-             ARM 侧：libQnnSystem/HtpPrepare/HtpV81Stub/QnnHtp 位于 /vendor/lib64/
-             DSP 侧：libQnnHtpV81Skel 位于 /vendor/lib/rfsa/adsp/，由 fastrpc 按
-                     ADSP_LIBRARY_PATH 拉起
-             这些库被 <uses-native-library> 声明后：
-             - APK 里不需要打包（linker 从 vendor 分区加载）
-             - app 命名空间会被 public.libraries.txt + manifest 白名单开放访问 -->
+        <!-- QNN vendor 库白名单（8845 的 Hexagon 是 V81）
+             ARM 侧 HTP 三件套（libQnnHtp / libQnnHtpPrepare / libQnnHtpV81Stub）位于 /vendor/lib64/，
+             与 DSP 侧 libQnnHtpV81Skel（/vendor/lib/rfsa/adsp/，由 fastrpc 按 ADSP_LIBRARY_PATH 拉起）同属设备固件，
+             因此 APK 不打包它们，由 linker 从 vendor 分区加载，保证版本一致。
+             libQnnSystem.so 不走 FastRPC，仍由 APK 内 jniLibs 提供（SDK 2.48）。 -->
         <uses-native-library
             android:name="libQnnSystem.so"
             android:required="false" />
@@ -43,9 +41,6 @@
             android:required="false" />
         <uses-native-library
             android:name="libQnnHtp.so"
-            android:required="false" />
-        <uses-native-library
-            android:name="libQnnHtpV81Skel.so"
             android:required="false" />
 
         <activity
