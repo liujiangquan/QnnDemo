@@ -1,9 +1,9 @@
 package com.breeze.qnn.laya
 
 object LayaConfig {
-    const val MAX_LEN = 512        // 固定序列长度（HTP 图输入）
+    const val MAX_LEN = 256        // 已验证的 HTP FP16 256-token 图
     const val MAX_OPTS = 16        // 固定 option 槽位（marker 维度）
-    const val HEAD_MAX_LEN = 256   // 问题头(含 option) token 预算
+    const val HEAD_MAX_LEN = 128   // 问题头(含 option)预算，为 state 留出空间
     const val OPT_TOKEN_CAP = 48   // 单个 option 文本最大 token 数
 
     const val QTYPE_CHOICE = 0

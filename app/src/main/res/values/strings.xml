@@ -32,8 +32,9 @@
     <string name="nav_laya">Laya</string>
 
     <!-- Laya 决策界面 -->
-    <string name="laya_title">Laya 决策</string>
-    <string name="laya_load">加载模型 (HTP)</string>
+    <string name="laya_title">Laya 决策 · 256 token</string>
+    <string name="laya_load">加载模型 (HTP FP16 · 256)</string>
+    <string name="laya_length_hint">总长度 256 token（含问题、选项和 state）；问题头最多 128 token，超长内容会截断并提示。</string>
     <string name="laya_state_hint">输入 state 文本，或粘贴 JSON</string>
     <string name="laya_ins_hint">问题（instructions），如：该工单应由哪个团队处理？</string>
     <string name="laya_opts_hint">choice/score 每行一个选项；noul 可留空</string>

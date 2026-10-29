@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.breeze.qnn.InferenceEngine
 import com.breeze.qnn.QnnNative
+import kotlinx.coroutines.CancellationException
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -18,6 +19,11 @@ class LayaBackend(private val context: Context) : AutoCloseable {
     private lateinit var seqBuilder: LayaSequenceBuilder
     private var graphName: String = ""
     private var loaded = false
+    val isLoaded: Boolean get() = loaded
+    var lastError: String? = null
+        private set
+    var lastInputTruncated: Boolean = false
+        private set
 
     private fun dir() = File(context.filesDir, LayaConfig.SUBDIR)
     private fun binFile() = File(dir(), LayaConfig.BIN_NAME)
@@ -28,32 +34,40 @@ class LayaBackend(private val context: Context) : AutoCloseable {
 
     /** 初始化 + 加载 HTP 模型 + tokenizer。 */
     suspend fun load(): Boolean {
-        if (!modelReady()) { Log.e(TAG, "模型未就绪，请先运行 setup_laya.sh"); return false }
-        if (!engine.init()) return false
-        if (!engine.loadContextBinary(binFile().absolutePath, QnnNative.Backend.HTP)) return false
-        val g = engine.graphInfos.firstOrNull() ?: return false
-        graphName = g.name
-        val tk = LayaTokenizer(tokFile().toPath())
+        close()
+        lastError = null
         try {
+            check(modelReady()) { "模型未就绪，请先运行 setup_laya.sh 部署 ${LayaConfig.MAX_LEN}-token FP16 模型" }
+            check(engine.init()) { "QNN 初始化失败，见 logcat" }
+            check(engine.loadContextBinary(binFile().absolutePath, QnnNative.Backend.HTP)) { "HTP 模型加载失败，见 logcat" }
+            val g = engine.graphInfos.singleOrNull() ?: error("Laya 模型需要恰好一张图")
+            LayaModelContract.validate(g)
+            graphName = g.name
+            val tk = LayaTokenizer(tokFile().toPath())
+            tokenizer = tk
             val bos = tk.tokenToId(LayaConfig.TOK_BOS)
             val eos = tk.tokenToId(LayaConfig.TOK_EOS)
             val mask = tk.tokenToId(LayaConfig.TOK_MASK)
             require(bos >= 0 && eos >= 0 && mask >= 0) { "特殊 token 解析失败: bos=$bos eos=$eos mask=$mask" }
             seqBuilder = LayaSequenceBuilder(tk::encode, bos, eos, mask)
-        } catch (t: Throwable) {
-            // 关闭刚创建的 tokenizer，避免 DJL 原生句柄泄漏后再抛出
-            tk.close()
-            throw t
+            loaded = true
+            Log.i(TAG, "Laya 加载成功 graph=$graphName maxLen=${LayaConfig.MAX_LEN} inputs=${g.inputs.map { it.name to it.dimensions }}")
+            return true
+        } catch (e: CancellationException) {
+            close()
+            throw e
+        } catch (e: Exception) {
+            lastError = e.message ?: "Laya 加载失败"
+            Log.e(TAG, lastError, e)
+            close()
+            return false
         }
-        tokenizer = tk
-        loaded = true
-        Log.i(TAG, "Laya 加载成功 graph=$graphName inputs=${g.inputs.map { it.name to it.dataType }}")
-        return true
     }
 
     /** 对一个 state 回答多个问题（保序）。 */
     suspend fun decide(state: String, questions: LinkedHashMap<String, Question>): Map<String, Answer> {
         check(loaded) { "请先 load()" }
+        lastInputTruncated = false
         val padId = tokenizer!!.tokenToId(LayaConfig.TOK_PAD).coerceAtLeast(0)
         val inputInfos = engine.graphInfos.first().inputs
         val order = inputInfos.map { it.name }
@@ -63,6 +77,8 @@ class LayaBackend(private val context: Context) : AutoCloseable {
         val out = LinkedHashMap<String, Answer>()
         for ((qid, q) in questions) {
             val built = seqBuilder.build(state, q)
+            lastInputTruncated = lastInputTruncated || built.truncated
+            if (built.truncated) Log.w(TAG, "输入已截断: $qid head=${built.headTruncated} stateDropped=${built.stateTokensDropped}")
             val k = built.markers.size
             val byName = mapOf(
                 "input_ids" to packIntsAs(built.ids, padId, LayaConfig.MAX_LEN, w("input_ids")),
@@ -86,7 +102,13 @@ class LayaBackend(private val context: Context) : AutoCloseable {
         return out
     }
 
-    override fun close() { tokenizer?.close(); engine.close(); loaded = false }
+    override fun close() {
+        tokenizer?.close()
+        tokenizer = null
+        engine.close()
+        loaded = false
+        lastInputTruncated = false
+    }
 
     companion object {
         private const val TAG = "LayaBackend"

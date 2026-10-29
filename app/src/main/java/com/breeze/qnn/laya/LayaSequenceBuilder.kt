@@ -13,24 +13,43 @@ class LayaSequenceBuilder(
     private val maxLen: Int = LayaConfig.MAX_LEN,
     private val headMaxLen: Int = LayaConfig.HEAD_MAX_LEN,
 ) {
-    data class Built(val ids: IntArray, val markers: IntArray)
+    data class Built(
+        val ids: IntArray,
+        val markers: IntArray,
+        val headTruncated: Boolean = false,
+        val stateTokensDropped: Int = 0,
+    ) {
+        val truncated: Boolean get() = headTruncated || stateTokensDropped > 0
+    }
 
     private fun scrub(s: String) = s.replace(LayaConfig.TOK_MASK, " ")
 
     fun build(state: String, q: Question): Built {
         val opts = q.renderOptions()
+        require(opts.size in 1..LayaConfig.MAX_OPTS) { "选项数量必须为 1..${LayaConfig.MAX_OPTS}" }
+        // 留出 BOS 和三个 EOS；不能把问题头或最后的 EOS 一起截掉。
+        val headBudget = minOf(headMaxLen, maxLen - 4)
+        require(headBudget >= 8) { "序列长度或问题头预算过小" }
         var headIds = encode("${q.typeName()} question: ${scrub(q.instructions)}").toMutableList()
+        var headTruncated = false
         var optIds = opts.map { o ->
-            (listOf(maskId) + encode(" " + scrub(o)).take(LayaConfig.OPT_TOKEN_CAP))
+            val tokens = encode(" " + scrub(o))
+            if (tokens.size > LayaConfig.OPT_TOKEN_CAP) headTruncated = true
+            listOf(maskId) + tokens.take(LayaConfig.OPT_TOKEN_CAP)
         }
         fun total(xs: List<List<Int>>) = xs.sumOf { it.size }
-        var optBudget = headMaxLen - total(optIds)
+        var optBudget = headBudget - total(optIds)
         if (optBudget < 16) {
-            val per = maxOf(4, (headMaxLen - 16) / maxOf(1, optIds.size))
-            optIds = optIds.map { it.take(per) }
-            optBudget = headMaxLen - total(optIds)
+            val per = maxOf(4, (headBudget - 16) / optIds.size)
+            optIds = optIds.map {
+                if (it.size > per) headTruncated = true
+                it.take(per)
+            }
+            optBudget = headBudget - total(optIds)
         }
+        if (headIds.size > maxOf(8, optBudget)) headTruncated = true
         headIds = headIds.take(maxOf(8, optBudget)).toMutableList()
+        require(headIds.size + total(optIds) <= headBudget) { "问题头预算不足以容纳所有选项" }
 
         val seq = ArrayList<Int>(maxLen)
         seq.add(bosId); seq.addAll(headIds); seq.add(eosId)
@@ -38,11 +57,10 @@ class LayaSequenceBuilder(
         for (o in optIds) { markers.add(seq.size); seq.addAll(o) }
         seq.add(eosId)
         val room = maxOf(0, maxLen - seq.size - 1)
-        val st = encode(scrub(state)).take(room)
+        val stateIds = encode(scrub(state))
+        val st = stateIds.take(room)
         seq.addAll(st); seq.add(eosId)
 
-        val ids = seq.take(maxLen).toIntArray()
-        val kept = markers.filter { it < maxLen }.toIntArray()
-        return Built(ids, kept)
+        return Built(seq.toIntArray(), markers.toIntArray(), headTruncated, stateIds.size - st.size)
     }
 }

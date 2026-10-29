@@ -6,6 +6,8 @@
     <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
         android:text="@string/laya_title" android:textSize="20sp" android:textStyle="bold" android:paddingBottom="8dp"/>
     <Button android:id="@+id/btnLayaLoad" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/laya_load"/>
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:text="@string/laya_length_hint" android:textSize="12sp" android:paddingTop="4dp"/>
 
     <!-- 预置测试样例：选择后自动填入下方输入框，并在预览区展示完整输入数据 -->
     <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"

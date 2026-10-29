@@ -42,13 +42,14 @@ class LayaFragment : Fragment() {
         b.btnLayaLoad.setOnClickListener {
             viewLifecycleOwner.lifecycleScope.launch {
                 busy(true)
+                backend?.close()
                 backend = LayaBackend(requireContext())
                 val t0 = System.nanoTime()
                 val msg = if (!backend!!.modelReady())
-                    "模型未就绪：请先运行 docs/setup_laya.sh 推送 laya.bin + tokenizer.json"
+                    "模型未就绪：请先运行 docs/setup_laya.sh 推送 256-token FP16 模型 + tokenizer.json"
                 else if (backend!!.load())
-                    "模型已加载 (HTP)，耗时 %.0f ms".format((System.nanoTime() - t0) / 1e6)
-                else "加载失败，见 logcat"
+                    "模型已加载 (HTP FP16，${LayaConfig.MAX_LEN} token)，耗时 %.0f ms".format((System.nanoTime() - t0) / 1e6)
+                else backend!!.lastError ?: "加载失败，见 logcat"
                 if (_b == null) return@launch
                 result(msg)
                 busy(false)
@@ -56,7 +57,7 @@ class LayaFragment : Fragment() {
         }
         b.btnDecide.setOnClickListener {
             val be = backend
-            if (be == null || !be.modelReady()) { result("请先加载模型"); return@setOnClickListener }
+            if (be == null || !be.isLoaded) { result("请先加载模型"); return@setOnClickListener }
             val q = buildQuestion() ?: run { result("请填写问题与选项"); return@setOnClickListener }
             viewLifecycleOwner.lifecycleScope.launch {
                 busy(true)
@@ -64,7 +65,8 @@ class LayaFragment : Fragment() {
                     val t0 = System.nanoTime()
                     val ans = be.decide(b.editState.text.toString(), linkedMapOf("q" to q))["q"]
                     val ms = (System.nanoTime() - t0) / 1e6
-                    render(ans) + "\n\n⏱ 决策耗时: %.1f ms".format(ms)
+                    render(ans) + "\n\n⏱ 决策耗时: %.1f ms".format(ms) +
+                        if (be.lastInputTruncated) "\n⚠ 输入已按 256-token 总长度／128-token 问题头预算截断，结果可能受影响。" else ""
                 } catch (e: Exception) { "异常: ${e.message}" }
                 if (_b == null) return@launch
                 result(msg)
