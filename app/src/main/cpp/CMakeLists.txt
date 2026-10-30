@@ -31,11 +31,14 @@ add_definitions(-DQAIRT_EASY_API)
 add_library(qnndemo SHARED
     qnn_jni.cpp
     qairt_runtime.cpp
+    llm_runtime.cpp
+    llm_jni.cpp
 )
 
 target_include_directories(qnndemo PRIVATE
     ${QAIRT_INCLUDE_DIR}
     ${QAIRT_INCLUDE_DIR}/QNN
+    ${QAIRT_INCLUDE_DIR}/Genie
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
