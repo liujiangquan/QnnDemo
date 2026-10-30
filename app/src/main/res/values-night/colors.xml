@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色模式：选中用亮紫，未选中用浅灰，背景比 surface 略深 -->
+    <color name="nav_item_selected">#FFBB86FC</color>
+    <color name="nav_item_unselected">#FFBDBDBD</color>
+    <color name="nav_bar_background">#FF1F1F1F</color>
+</resources>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- BottomNav 图标/文字颜色。默认主题下未选中项会跟白色背景撞色看不见，
+     这里显式给深灰，选中给主色。 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_checked="true"  android:color="@color/nav_item_selected"/>
+    <item android:color="@color/nav_item_unselected"/>
+</selector>
