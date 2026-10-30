@@ -6,13 +6,9 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.fragment.app.Fragment
-import com.breeze.qnn.ui.BackendFragment
 import com.breeze.qnn.ui.ChatFragment
 import com.breeze.qnn.ui.SettingsFragment
 import com.google.android.material.bottomnavigation.BottomNavigationView
-
-// 默认从 assets 加载的 DLC 文件名（由 setup 脚本放入 assets）
-const val DEFAULT_DLC_ASSET = "model.dlc"
 
 /**
  * 主界面：BottomNavigation 容器。后续新增 tab 只需加菜单项与对应 Fragment。
@@ -32,13 +28,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (savedInstanceState == null) {
-            switchTo(BackendFragment())
+            switchTo(ChatFragment())
         }
 
         findViewById<BottomNavigationView>(R.id.bottom_nav)
             .setOnItemSelectedListener { item ->
                 when (item.itemId) {
-                    R.id.nav_backend  -> switchTo(BackendFragment())
                     R.id.nav_chat     -> switchTo(ChatFragment())
                     R.id.nav_settings -> switchTo(SettingsFragment())
                     else -> return@setOnItemSelectedListener false

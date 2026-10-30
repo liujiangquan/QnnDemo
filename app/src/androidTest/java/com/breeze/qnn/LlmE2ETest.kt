@@ -25,7 +25,7 @@ private const val MODEL_ID = "qwen3-3b"
  * 需要设备预置 Qwen3-3B 权重（`bash docs/setup_qwen3_llm.sh <src>`）；
  * 权重不在时 @Before 里 `assumeTrue` 会 skip 所有测试，CI 不 red。
  *
- * 跟 BackendE2ETest 平级；SDK 2.48 Genie 框架 + vendor 2.46 HTP + signed PD。
+ * SDK 2.48 Genie 框架 + vendor 2.46 HTP + signed PD。
  * 详见 `docs/superpowers/plans/2026-07-22-8845-llm-qwen3.md` Task 4。
  */
 @RunWith(AndroidJUnit4::class)
