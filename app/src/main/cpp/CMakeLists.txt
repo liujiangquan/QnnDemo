@@ -34,6 +34,10 @@ add_library(qnndemo SHARED
     llm_runtime.cpp
     llm_jni.cpp
     asr_jni.cpp
+    chineseclip/clip_jni.cpp
+    chineseclip/clipsolver.cpp
+    chineseclip/imagemodel.cpp
+    chineseclip/textmodel.cpp
 )
 
 target_include_directories(qnndemo PRIVATE
@@ -42,6 +46,8 @@ target_include_directories(qnndemo PRIVATE
     ${QAIRT_INCLUDE_DIR}/Genie
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/stepinfer_include
+    ${CMAKE_CURRENT_SOURCE_DIR}/mnn_include
+    ${CMAKE_CURRENT_SOURCE_DIR}/opencv_include
 )
 
 # 链接 Android 基础库；QAIRT .so 在运行时通过 dlopen 加载，不在此链接
@@ -56,6 +62,21 @@ add_library(step_infer SHARED IMPORTED)
 set_target_properties(step_infer PROPERTIES
     IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/arm64-v8a/libstep_infer.so")
 target_link_libraries(qnndemo step_infer)
+
+# Chinese-CLIP：MNN（AIEngine 产物，SONAME 已改为 libmnn_aiengine.so，避免被系统 libMNN.so 截胡）
+add_library(mnn_aiengine SHARED IMPORTED)
+set_target_properties(mnn_aiengine PROPERTIES
+    IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/arm64-v8a/libmnn_aiengine.so")
+target_link_libraries(qnndemo mnn_aiengine)
+
+# OpenCV：复用 QnnDemo 已有的 split 库（不引入 libopencv_java4）；AndroidBitmap 需 jnigraphics
+add_library(opencv_core_so SHARED IMPORTED)
+set_target_properties(opencv_core_so PROPERTIES
+    IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/arm64-v8a/libopencv_core.so")
+add_library(opencv_imgproc_so SHARED IMPORTED)
+set_target_properties(opencv_imgproc_so PROPERTIES
+    IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/arm64-v8a/libopencv_imgproc.so")
+target_link_libraries(qnndemo opencv_core_so opencv_imgproc_so jnigraphics)
 
 # 导出符号可见性控制
 set_target_properties(qnndemo PROPERTIES

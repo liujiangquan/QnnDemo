@@ -34,7 +34,7 @@ android {
                 // C++ 标准与异常支持
                 cppFlags("-std=c++17 -fexceptions -frtti -O2")
                 // 传递给 native 代码的宏定义
-                arguments("-DANDROID_STL=c++_static")
+                arguments("-DANDROID_STL=c++_shared")
             }
         }
     }
