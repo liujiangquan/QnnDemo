@@ -6,6 +6,9 @@
     <!-- 语音识别录音 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- 搜图：读取本机图片（Android 13+） -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+
     <!-- 读取 DLC 模型文件（如从外部存储加载时） -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
