@@ -33,6 +33,7 @@ add_library(qnndemo SHARED
     qairt_runtime.cpp
     llm_runtime.cpp
     llm_jni.cpp
+    asr_jni.cpp
 )
 
 target_include_directories(qnndemo PRIVATE
@@ -40,6 +41,7 @@ target_include_directories(qnndemo PRIVATE
     ${QAIRT_INCLUDE_DIR}/QNN
     ${QAIRT_INCLUDE_DIR}/Genie
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/stepinfer_include
 )
 
 # 链接 Android 基础库；QAIRT .so 在运行时通过 dlopen 加载，不在此链接
@@ -48,6 +50,12 @@ target_link_libraries(qnndemo
     android
     dl
 )
+
+# libstep_infer.so 为预编译库，直接链接以调用 ASREngine（第二层 Gate）
+add_library(step_infer SHARED IMPORTED)
+set_target_properties(step_infer PROPERTIES
+    IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/arm64-v8a/libstep_infer.so")
+target_link_libraries(qnndemo step_infer)
 
 # 导出符号可见性控制
 set_target_properties(qnndemo PROPERTIES

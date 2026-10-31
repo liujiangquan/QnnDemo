@@ -2,10 +2,12 @@ package com.breeze.qnn
 
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
+import android.view.View
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.fragment.app.Fragment
+import com.breeze.qnn.ui.AsrFragment
 import com.breeze.qnn.ui.ChatFragment
 import com.breeze.qnn.ui.SettingsFragment
 import com.google.android.material.bottomnavigation.BottomNavigationView
@@ -21,9 +23,10 @@ class MainActivity : AppCompatActivity() {
         // 补 status bar 顶部 padding + navigation bar 底部 padding，内容不被系统栏遮住。
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(R.layout.activity_main)
-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.root)) { v, insets ->
+        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.root)) { _, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            findViewById<View>(R.id.fragment_container).setPadding(0, bars.top, 0, 0)
+            findViewById<View>(R.id.bottom_nav).setPadding(0, 0, 0, bars.bottom)
             insets
         }
 
@@ -35,6 +38,7 @@ class MainActivity : AppCompatActivity() {
             .setOnItemSelectedListener { item ->
                 when (item.itemId) {
                     R.id.nav_chat     -> switchTo(ChatFragment())
+                    R.id.nav_asr      -> switchTo(AsrFragment())
                     R.id.nav_settings -> switchTo(SettingsFragment())
                     else -> return@setOnItemSelectedListener false
                 }

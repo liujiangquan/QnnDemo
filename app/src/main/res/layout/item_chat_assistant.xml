@@ -8,7 +8,7 @@
         android:id="@+id/assistant_text"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:background="#EEEEEE"
+        android:background="@drawable/bubble_assistant"
         android:padding="12dp"
         android:textSize="16sp"/>
     <TextView
