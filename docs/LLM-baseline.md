@@ -22,8 +22,8 @@
 ## 复现方法
 
 ```bash
-# 首次接机器 push 权重（外部工作已就绪）
-bash docs/setup_qwen3_llm.sh <path-to-qwen3-3b-package>
+# 首次接机器 push 权重到公共目录 /data/models/chat
+bash docs/setup_qwen3_llm.sh <path-to-qwen3-4b-package>
 
 # 跑 5 次取 median
 for i in 1 2 3 4 5; do
@@ -39,5 +39,6 @@ done
 
 - `docs/superpowers/specs/2026-07-22-8845-llm-inference-design.md` — Design spec
 - `docs/superpowers/plans/2026-07-22-8845-llm-qwen3.md` — Implementation plan
-- `docs/setup_qwen3_llm.sh` — 权重预置脚本
+- `docs/setup_qwen3_llm.sh` — 权重预置脚本（推送到 `/data/models/chat`）
+- `docs/cleanup_legacy_models.sh` — 清理旧私有目录模型
 - `docs/QNN集成完整指南.md` — QNN 基础集成流程

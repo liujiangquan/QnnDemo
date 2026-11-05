@@ -14,8 +14,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.breeze.qnn.ChineseClipModel
 import com.breeze.qnn.ClipIndex
+import com.breeze.qnn.ModelStore
 import com.breeze.qnn.R
-import java.io.File
 import java.util.concurrent.Executors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -83,8 +83,9 @@ class ClipFragment : Fragment() {
     /** 确保模型已加载（在 clip 线程上）。 */
     private suspend fun ensureModel(): ChineseClipModel? = withContext(clipDispatcher) {
         clip ?: ChineseClipModel().also { m ->
-            val dir = File(requireContext().filesDir, "clip/chineseclip")
-            if (m.init(dir)) clip = m else { m.close(); toast("模型未就绪：请先预置 chineseclip") }
+            val dir = ModelStore.clip(requireContext())?.dir
+            if (dir != null && m.init(dir)) clip = m
+            else { m.close(); toast("模型未就绪：/data/models/clip/chineseclip") }
         }
         clip
     }

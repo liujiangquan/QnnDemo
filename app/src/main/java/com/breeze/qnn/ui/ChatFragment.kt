@@ -88,7 +88,7 @@ class ChatFragment : Fragment() {
                     btnStop.visibility = View.VISIBLE
                 }
                 LlmViewModel.State.WEIGHTS_MISSING -> {
-                    banner.text = "权重未预置。请跑：\nbash docs/setup_qwen3_llm.sh <src_dir>"
+                    banner.text = "权重未预置。请确认 /data/models/chat 下有模型"
                     banner.visibility = View.VISIBLE
                     btnSend.isEnabled = false
                 }

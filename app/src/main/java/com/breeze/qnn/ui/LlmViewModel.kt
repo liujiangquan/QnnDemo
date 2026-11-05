@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
 import com.breeze.qnn.LlmBackend
+import com.breeze.qnn.ModelStore
 import com.breeze.qnn.SamplingParams
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -25,11 +26,11 @@ class LlmViewModel(app: Application) : AndroidViewModel(app) {
         if (state.value != State.INIT) return
         viewModelScope.launch {
             if (!backend.init()) { state.postValue(State.WEIGHTS_MISSING); return@launch }
-            if (!backend.weightsReady("qwen3-3b")) {
+            if (!backend.weightsReady(ModelStore.DEFAULT_LLM_ID)) {
                 state.postValue(State.WEIGHTS_MISSING); return@launch
             }
             state.postValue(State.LOADING)
-            if (backend.loadModel("qwen3-3b")) state.postValue(State.READY)
+            if (backend.loadModel(ModelStore.DEFAULT_LLM_ID)) state.postValue(State.READY)
             else { error.postValue("loadModel 失败"); state.postValue(State.INIT) }
         }
     }

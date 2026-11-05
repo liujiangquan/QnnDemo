@@ -2,9 +2,9 @@
 # =============================================================================
 # setup_qwen3_llm.sh
 #
-# 一键把 AIEngine Qwen3-4B QNN Genie bundle push 到 8845 设备的 app private
-# filesDir，并在设备侧生成 Genie 1.19 config（rope 放到 model.positional-encoding
-# 块，SDK 2.48 Genie 才认）。
+# 一键把 AIEngine Qwen3-4B QNN Genie bundle push 到 8845 设备的公共模型目录
+# /data/models/chat（App 运行时从这里加载，重装 App 不丢模型），并在设备侧生成
+# Genie 1.19 config（rope 放到 model.positional-encoding 块，SDK 2.48 Genie 才认）。
 #
 # 用法：
 #   bash docs/setup_qwen3_llm.sh <src_bundle_dir>
@@ -33,8 +33,8 @@ fi
 
 SRC="$1"
 PKG="com.breeze.qnn"
-# 目录名沿用 qwen3-3b（LlmE2ETest 里 MODEL_ID 常量），实际是 4B
-DST="/data/user/0/${PKG}/files/llm/qwen3-3b"
+# 公共模型目录，App 通过 ModelStore 从这里加载；目录名与预置布局一致
+DST="/data/models/chat"
 
 # 校验源文件
 for f in \
@@ -66,14 +66,11 @@ done
 adb push "$SRC/tokenizer.json" "${DST}/tokenizer.json" 2>&1 | tail -1
 adb push "$SRC/htp_backend_ext_config-v81.json" "${DST}/htp_backend_ext_config-v81.json" 2>&1 | tail -1
 
-# 兼容 LlmBackend.weightsReady() 里 500MB size 检查：给 shard 1 建个 hardlink
-adb shell "ln -f ${DST}/models/weight_sharing_model_1_of_4.serialized.bin ${DST}/qwen3-3b-context.bin"
-
 echo ""
 echo "===== 生成 v1.19 schema 的 Genie config ====="
 # 用项目本地临时文件，避开 MSYS /tmp -> Windows 路径转换踩坑
 mkdir -p "$SRC/.setup_tmp"
-TMP_CONFIG="$SRC/.setup_tmp/qwen3-3b-htp.json"
+TMP_CONFIG="$SRC/.setup_tmp/qwen3-4b-htp-v81.json"
 cat > "$TMP_CONFIG" <<'JSON'
 {
   "dialog" : {
@@ -139,7 +136,7 @@ cat > "$TMP_CONFIG" <<'JSON'
 JSON
 # 替换绝对路径
 sed -i.bak "s|__DST__|${DST}|g" "$TMP_CONFIG" && rm -f "$TMP_CONFIG.bak"
-adb push "$TMP_CONFIG" "${DST}/qwen3-3b-htp.json" 2>&1 | tail -1
+adb push "$TMP_CONFIG" "${DST}/qwen3-4b-htp-v81.json" 2>&1 | tail -1
 rm -rf "$SRC/.setup_tmp"
 
 adb shell "chmod -R 644 ${DST} 2>/dev/null; chmod 755 ${DST} ${DST}/models"

@@ -17,7 +17,7 @@ import org.junit.runner.RunWith
 import kotlin.system.measureTimeMillis
 
 private const val TAG = "LlmE2ETest"
-private const val MODEL_ID = "qwen3-3b"
+private const val MODEL_ID = ModelStore.DEFAULT_LLM_ID
 
 /**
  * LLM 端到端测试 —— 覆盖 loadModel / generate / stop / 多轮对话 4 个场景。

@@ -14,8 +14,8 @@ import java.io.File
 /**
  * ASR 回归：voice_asr 模型经 AsrBackend（libstep_infer ASREngine）识别样例 WAV。
  *
- * 需要设备预置：files/asr/voice_asr/（setup_voice_asr.sh）与 files/asr/asr_example.wav。
- * 缺失时 skip，不计为通过。用 am instrument 运行，保留 files。
+ * 需要设备预置：/data/models/asr/voice_asr/ 与 /data/models/asr/asr_example.wav
+ * （缺失时回退 app 私有目录）。缺失时 skip，不计为通过。用 am instrument 运行。
  */
 @RunWith(AndroidJUnit4::class)
 class AsrE2ETest {
@@ -26,7 +26,7 @@ class AsrE2ETest {
     @Before
     fun setup() {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
-        wav = File(ctx.filesDir, "asr/asr_example.wav")
+        wav = ModelStore.asrSample(ctx) ?: File(ctx.filesDir, "asr/asr_example.wav")
         assumeTrue("样例 WAV 缺失，请先运行 setup_voice_asr.sh", wav.isFile)
         backend = AsrBackend(ctx)
         assumeTrue("voice_asr 模型未就绪", backend.modelReady())

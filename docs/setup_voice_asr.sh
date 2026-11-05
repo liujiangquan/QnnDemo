@@ -2,8 +2,8 @@
 # =============================================================================
 # setup_voice_asr.sh
 #
-# 把 voice_asr 流式语音识别包 push 到 8845 设备的 app private filesDir，供
-# AsrBackend（ASREngine::init）加载。包不进 APK。
+# 把 voice_asr 流式语音识别包 push 到 8845 设备的公共模型目录 /data/models/asr，
+# 供 AsrBackend（ASREngine::init）加载。包不进 APK。
 #
 # 用法：
 #   bash docs/setup_voice_asr.sh <src_voice_asr_dir> [sample_wav]
@@ -19,10 +19,10 @@
 #       ├── qwen3_base_weight_sharing_model_ar128_ar1_cl2048_1_of_2.serialized.bin
 #       └── qwen3_base_weight_sharing_model_ar128_ar1_cl2048_2_of_2.serialized.bin
 #
-# [sample_wav] 可选：16 kHz 单声道 wav，推送为 files/asr/asr_example.wav，供「识别样例」按钮使用。
+# [sample_wav] 可选：16 kHz 单声道 wav，推送为 /data/models/asr/asr_example.wav，供「识别样例」按钮使用。
 #
 # 依赖：adb 能连到设备 + com.breeze.qnn 已装（./gradlew :app:assembleDebug 后 adb install -r）
-# 注意：用 install -r 安装或直接推送，不要 connectedDebugAndroidTest（会卸载重装清空 filesDir）。
+# 注意：模型在 /data/models，重装 App 不会丢；connectedDebugAndroidTest 卸载重装也不影响。
 # =============================================================================
 set -eu
 export MSYS_NO_PATHCONV=1
@@ -35,7 +35,7 @@ fi
 SRC="$1"
 SAMPLE="${2:-}"
 PKG="com.breeze.qnn"
-DST="/data/user/0/${PKG}/files/asr"
+DST="/data/models/asr"
 MODEL_DST="${DST}/voice_asr"
 
 # 校验源文件（缺一即退出）
@@ -59,7 +59,7 @@ if ! adb shell "pm list packages ${PKG}" | grep -q "package:${PKG}"; then
     exit 1
 fi
 
-adb root >/dev/null 2>&1 || echo "[WARN] adb root 未拿到（若写入 files 失败请检查权限）"
+adb root >/dev/null 2>&1 || echo "[WARN] adb root 未拿到（若写入 /data/models 失败请检查权限）"
 
 echo ""
 echo "===== 创建目录（保持相对路径结构）====="

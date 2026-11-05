@@ -16,9 +16,9 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.breeze.qnn.AsrBackend
+import com.breeze.qnn.ModelStore
 import com.breeze.qnn.R
 import com.breeze.qnn.databinding.FragmentAsrBinding
-import java.io.File
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -67,9 +67,9 @@ class AsrFragment : Fragment() {
 
     private fun runSample() {
         if (busy || recording) return
-        val wav = File(requireContext().filesDir, "asr/asr_example.wav")
-        if (!wav.isFile) {
-            toast("样例不存在：请先运行 docs/setup_voice_asr.sh")
+        val wav = ModelStore.asrSample(requireContext())
+        if (wav == null || !wav.isFile) {
+            toast("样例不存在：/data/models/asr/asr_example.wav")
             return
         }
         busy = true

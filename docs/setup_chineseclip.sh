@@ -2,8 +2,8 @@
 # =============================================================================
 # setup_chineseclip.sh
 #
-# 把 Chinese-CLIP（MNN，文搜图）模型 push 到 8845 设备的 app private filesDir，
-# 供 ChineseClipModel（nativeInit）加载。模型不进 APK。
+# 把 Chinese-CLIP（MNN，文搜图）模型 push 到 8845 设备的公共模型目录
+# /data/models/clip/chineseclip，供 ChineseClipModel（nativeInit）加载。模型不进 APK。
 #
 # 用法：
 #   bash docs/setup_chineseclip.sh <src_chineseclip_dir>
@@ -14,7 +14,7 @@
 #   └── rn50_txt_fp16.mnn
 #
 # 依赖：adb 能连到设备 + com.breeze.qnn 已装（adb install -r，保留 files）
-# 注意：不要用 connectedDebugAndroidTest（会卸载重装清空 filesDir）。
+# 注意：模型已移到 /data/models，connectedDebugAndroidTest 卸载重装 App 不再影响模型。
 # =============================================================================
 set -eu
 export MSYS_NO_PATHCONV=1
@@ -26,7 +26,7 @@ fi
 
 SRC="$1"
 PKG="com.breeze.qnn"
-DST="/data/user/0/${PKG}/files/clip/chineseclip"
+DST="/data/models/clip/chineseclip"
 
 # 校验源文件（缺一即退出）
 for f in \

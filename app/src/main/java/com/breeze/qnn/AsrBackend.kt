@@ -10,7 +10,7 @@ import kotlinx.coroutines.withContext
 /**
  * 语音识别后端：管理 voice_asr 模型生命周期，提供流式识别。
  *
- * 模型目录：filesDir/asr/voice_asr/（由 docs/setup_voice_asr.sh 预置，不进 APK）。
+ * 模型目录：优先 /data/models/asr/voice_asr/（设备预置），缺失时回退 filesDir/asr/voice_asr/。
  * ASREngine 非线程安全，所有 native 调用经单线程 [dispatcher] 串行化。
  */
 class AsrBackend(private val context: Context) : AutoCloseable {
@@ -22,13 +22,16 @@ class AsrBackend(private val context: Context) : AutoCloseable {
 
     @Volatile private var handle: Long = 0L
 
+    /** 模型目录，找不到返回 null。 */
+    private fun modelDir(): File? = ModelStore.asr(context)?.dir
+
     /** 模型目录的 model_config.json 路径。 */
-    private val configPath: String
-        get() = "${context.filesDir.absolutePath}/asr/voice_asr/model_config.json"
+    private val configPath: String?
+        get() = modelDir()?.let { File(it, "model_config.json").absolutePath }
 
     /** 模型文件是否齐全（配置、tokenizer、编码器、LLM 两个 shard、embedding）。 */
     fun modelReady(): Boolean {
-        val root = File(context.filesDir, "asr/voice_asr")
+        val root = modelDir() ?: return false
         return File(root, "model_config.json").isFile &&
             File(root, "stream_model/tokenizer.json").isFile &&
             File(root, "stream_model/asr_step2_0p6b_streaming_320ms_audio_fp16.serialized.bin").isFile &&
@@ -44,7 +47,7 @@ class AsrBackend(private val context: Context) : AutoCloseable {
             Log.e(TAG, "模型文件不齐全，请先运行 docs/setup_voice_asr.sh")
             return@withContext false
         }
-        handle = native.nativeCreate(configPath)
+        handle = native.nativeCreate(configPath ?: return@withContext false)
         if (handle == 0L) {
             Log.e(TAG, "ASREngine 初始化失败，errCode=${native.nativeLastInitError()}")
             false
